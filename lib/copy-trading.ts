@@ -102,6 +102,42 @@ export interface CopyExecutionContext {
   simulation: { ok: boolean; blockNumber: bigint; reason?: string };
 }
 
+/**
+ * What the owner signs to grant (or re-grant) a copy permission.
+ *
+ * Bound to the action, a single-use nonce and a short expiry so a captured
+ * request body cannot be replayed, and so a grant signature can never be
+ * presented as a revocation or vice versa. The wallet is interpolated VERBATIM:
+ * a Stellar strkey is case-sensitive base32.
+ */
+export function copyGrantMessage(args: {
+  permissionId: string; ownerWallet: string; policyHash: string; nonce: string; expiresAt: number;
+}): string {
+  return [
+    "Mimir copy permission",
+    "action: grant",
+    `permission: ${args.permissionId}`,
+    `owner: ${args.ownerWallet}`,
+    `policyHash: ${args.policyHash}`,
+    `nonce: ${args.nonce}`,
+    `expiresAt: ${new Date(args.expiresAt).toISOString()}`,
+  ].join("\n");
+}
+
+/** What the owner signs to revoke a copy permission. See {@link copyGrantMessage}. */
+export function copyRevokeMessage(args: {
+  permissionId: string; ownerWallet: string; nonce: string; expiresAt: number;
+}): string {
+  return [
+    "Mimir revoke copy permission",
+    "action: revoke",
+    `permission: ${args.permissionId}`,
+    `owner: ${args.ownerWallet}`,
+    `nonce: ${args.nonce}`,
+    `expiresAt: ${new Date(args.expiresAt).toISOString()}`,
+  ].join("\n");
+}
+
 export function copyPolicyHash(input: Omit<CopyPermission, "signedPolicyHash">): string {
   return sha256Hex(JSON.stringify(input, (_, value) => typeof value === "bigint" ? value.toString() : value));
 }

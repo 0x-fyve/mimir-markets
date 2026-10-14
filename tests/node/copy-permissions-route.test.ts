@@ -16,11 +16,21 @@ interface PermissionDbRow {
 }
 
 const permissionsTable = new Map<string, PermissionDbRow>();
+const noncesTable = new Set<string>();
 const executionsTable: Array<Record<string, unknown>> = [];
 
 function installFakePool(): void {
   const handler = async (sql: string, args: unknown[] = []) => {
     const s = sql.trim();
+    if (s.includes("INSERT INTO agent_api_nonces")) {
+      const nonce = String(args[0]);
+      if (noncesTable.has(nonce)) return { rows: [] };
+      noncesTable.add(nonce);
+      return { rows: [{ nonce }] };
+    }
+    if (s.includes("FROM agent_api_nonces")) {
+      return { rows: noncesTable.has(String(args[0])) ? [{ one: 1 }] : [] };
+    }
     if (s.includes("INSERT INTO copy_permissions")) {
       const [permission_id, owner_wallet, execution_agent_id, signal_agent_id, policy_json, signed_policy_hash, status, at] = args as any[];
       const existing = permissionsTable.get(permission_id);
@@ -76,7 +86,9 @@ function installFakePool(): void {
 installFakePool();
 
 import { POST, GET, DELETE } from "../../app/api/copy/permissions/route";
-import { copyPolicyHash, type CopyPermission } from "../../lib/copy-trading";
+import {
+  copyGrantMessage, copyPolicyHash, copyRevokeMessage, type CopyPermission,
+} from "../../lib/copy-trading";
 import { getUsdcSacId } from "../../lib/stellar";
 import { configuredSpender } from "../../lib/agents/spend-permissions";
 
@@ -86,11 +98,6 @@ const OWNER = ownerKeypair.publicKey();
 // Ensure configured USDC and Spender match runtime test defaults if present
 const USDC = getUsdcSacId() || "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
 const SPENDER = configuredSpender() || "CDV6JXIJCALSXQELCS6YUEWJWG5DFXQK5PJ5I7MWI6KVMQJBC5DLPKZI";
-
-function policyMessage(permission: Omit<CopyPermission, "signedPolicyHash">): string {
-  const hash = copyPolicyHash(permission);
-  return `Mimir copy permission\npermission: ${permission.permissionId}\nowner: ${permission.ownerWallet}\npolicyHash: ${hash}`;
-}
 
 function makeUnsignedPermission(id = "route-test-perm-1", owner = OWNER): Omit<CopyPermission, "signedPolicyHash"> {
   return {
@@ -119,9 +126,46 @@ function makeUnsignedPermission(id = "route-test-perm-1", owner = OWNER): Omit<C
   };
 }
 
-function signPermission(permission: Omit<CopyPermission, "signedPolicyHash">, signer: Keypair = ownerKeypair): string {
-  const msg = policyMessage(permission);
-  return signer.sign(Buffer.from(msg, "utf8")).toString("base64");
+let nonceCounter = 0;
+function freshNonce(): string {
+  nonceCounter += 1;
+  return `test-nonce-${Date.now()}-${nonceCounter}`;
+}
+
+interface SignedGrant { signature: string; nonce: string; expiresAt: number }
+
+function signPermission(
+  permission: Omit<CopyPermission, "signedPolicyHash">,
+  signer: Keypair = ownerKeypair,
+  opts: { nonce?: string; expiresAt?: number } = {},
+): SignedGrant {
+  const nonce = opts.nonce ?? freshNonce();
+  const expiresAt = opts.expiresAt ?? Date.now() + 60_000;
+  const msg = copyGrantMessage({
+    permissionId: permission.permissionId,
+    ownerWallet: permission.ownerWallet,
+    policyHash: copyPolicyHash(permission),
+    nonce,
+    expiresAt,
+  });
+  return { signature: signer.sign(Buffer.from(msg, "utf8")).toString("base64"), nonce, expiresAt };
+}
+
+function signRevoke(permissionId: string, signer: Keypair = ownerKeypair, owner = OWNER): SignedGrant {
+  const nonce = freshNonce();
+  const expiresAt = Date.now() + 60_000;
+  const msg = copyRevokeMessage({ permissionId, ownerWallet: owner, nonce, expiresAt });
+  return { signature: signer.sign(Buffer.from(msg, "utf8")).toString("base64"), nonce, expiresAt };
+}
+
+function grantBody(permission: Omit<CopyPermission, "signedPolicyHash">, signed: SignedGrant) {
+  return {
+    permission: {
+      ...permission,
+      spendPermission: { ...permission.spendPermission, allowanceAtomic: "1000000000" },
+    },
+    ...signed,
+  };
 }
 
 function jsonRequest(url: string, method: string, body?: unknown): Request {
@@ -159,7 +203,7 @@ test("POST /api/copy/permissions: enforces token, spender, budget and signature 
           ...wrongTokenPerm,
           spendPermission: { ...wrongTokenPerm.spendPermission, allowanceAtomic: "1000000000" },
         },
-        signature: wrongTokenSig,
+        ...wrongTokenSig,
       }),
     );
     assert.equal(res.status, 400);
@@ -175,7 +219,7 @@ test("POST /api/copy/permissions: enforces token, spender, budget and signature 
         ...badBudgetPerm,
         spendPermission: { ...badBudgetPerm.spendPermission, allowanceAtomic: "1000000000" },
       },
-      signature: badBudgetSig,
+      ...badBudgetSig,
     }),
   );
   assert.equal(badBudgetRes.status, 400);
@@ -184,10 +228,7 @@ test("POST /api/copy/permissions: enforces token, spender, budget and signature 
   const validSig = signPermission(perm);
   const invalidSigRes = await POST(
     jsonRequest("http://localhost/api/copy/permissions", "POST", {
-      permission: {
-        ...perm,
-        spendPermission: { ...perm.spendPermission, allowanceAtomic: "1000000000" },
-      },
+      ...grantBody(perm, validSig),
       signature: "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw",
     }),
   );
@@ -204,7 +245,7 @@ test("POST /api/copy/permissions: stores valid permission and returns contract f
         ...perm,
         spendPermission: { ...perm.spendPermission, allowanceAtomic: "1000000000" },
       },
-      signature: sig,
+      ...sig,
     }),
   );
 
@@ -239,24 +280,21 @@ test("GET /api/copy/permissions: retrieves executions by permissionId", async ()
 
 test("DELETE /api/copy/permissions: rejects invalid signature and revokes with valid signature", async () => {
   const permId = "perm-valid-store-1";
-  const revokeMsg = `Mimir revoke copy permission\npermission: ${permId}\nowner: ${OWNER}`;
+  const revoke = signRevoke(permId);
 
   // Invalid signature
   const badSig = await DELETE(
     jsonRequest("http://localhost/api/copy/permissions", "DELETE", {
       permissionId: permId,
+      ...revoke,
       signature: "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw",
     }),
   );
   assert.equal(badSig.status, 401);
 
   // Valid signature
-  const validRevokeSig = ownerKeypair.sign(Buffer.from(revokeMsg, "utf8")).toString("base64");
   const revokeRes = await DELETE(
-    jsonRequest("http://localhost/api/copy/permissions", "DELETE", {
-      permissionId: permId,
-      signature: validRevokeSig,
-    }),
+    jsonRequest("http://localhost/api/copy/permissions", "DELETE", { permissionId: permId, ...revoke }),
   );
   assert.equal(revokeRes.status, 200);
   const revokeBody = await revokeRes.json();
@@ -269,4 +307,87 @@ test("DELETE /api/copy/permissions: rejects invalid signature and revokes with v
   const reGetBody = await reGet.json();
   assert.equal(reGetBody.permissionId, permId);
   assert.ok(Array.isArray(reGetBody.executions));
+});
+
+// ── Replay protection ───────────────────────────────────────────────────────
+
+test("replaying the original grant after revocation is refused with 409", async () => {
+  const perm = makeUnsignedPermission("perm-replay-after-revoke");
+  const grant = signPermission(perm);
+  const body = grantBody(perm, grant);
+
+  const first = await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", body));
+  assert.equal(first.status, 200);
+
+  const revoke = signRevoke(perm.permissionId);
+  const revoked = await DELETE(
+    jsonRequest("http://localhost/api/copy/permissions", "DELETE", { permissionId: perm.permissionId, ...revoke }),
+  );
+  assert.equal(revoked.status, 200);
+
+  // Exact replay of the captured body.
+  const replay = await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", body));
+  assert.equal(replay.status, 409);
+
+  // Even a freshly signed grant cannot resurrect a revoked id.
+  const regrant = await POST(
+    jsonRequest("http://localhost/api/copy/permissions", "POST", grantBody(perm, signPermission(perm))),
+  );
+  assert.equal(regrant.status, 409);
+  assert.equal(permissionsTable.get(perm.permissionId)?.status, "revoked");
+});
+
+test("a grant nonce is single-use", async () => {
+  const perm = makeUnsignedPermission("perm-nonce-single-use");
+  const body = grantBody(perm, signPermission(perm));
+  const first = await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", body));
+  assert.equal(first.status, 200);
+  const replay = await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", body));
+  assert.equal(replay.status, 409);
+});
+
+test("a grant without a nonce, or with an expired or far-future expiry, is refused", async () => {
+  const perm = makeUnsignedPermission("perm-window-checks");
+  const noNonce = grantBody(perm, signPermission(perm));
+  const { nonce: _omit, ...withoutNonce } = noNonce;
+  assert.equal((await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", withoutNonce))).status, 400);
+
+  const expired = grantBody(perm, signPermission(perm, ownerKeypair, { expiresAt: Date.now() - 1 }));
+  assert.equal((await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", expired))).status, 400);
+
+  const farFuture = grantBody(perm, signPermission(perm, ownerKeypair, { expiresAt: Date.now() + 86_400_000 }));
+  assert.equal((await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", farFuture))).status, 400);
+});
+
+test("a grant signature is not accepted as a revocation", async () => {
+  const perm = makeUnsignedPermission("perm-grant-not-revoke");
+  const grant = signPermission(perm);
+  assert.equal(
+    (await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", grantBody(perm, grant)))).status,
+    200,
+  );
+  const crossed = await DELETE(
+    jsonRequest("http://localhost/api/copy/permissions", "DELETE", {
+      permissionId: perm.permissionId,
+      signature: grant.signature,
+      nonce: grant.nonce,
+      expiresAt: grant.expiresAt,
+    }),
+  );
+  assert.equal(crossed.status, 401);
+  assert.equal(permissionsTable.get(perm.permissionId)?.status, "active");
+});
+
+test("another wallet cannot overwrite an existing permission id", async () => {
+  const perm = makeUnsignedPermission("perm-owned-by-owner");
+  assert.equal(
+    (await POST(jsonRequest("http://localhost/api/copy/permissions", "POST", grantBody(perm, signPermission(perm))))).status,
+    200,
+  );
+  const attacker = Keypair.random();
+  const hijack = makeUnsignedPermission("perm-owned-by-owner", attacker.publicKey());
+  const res = await POST(
+    jsonRequest("http://localhost/api/copy/permissions", "POST", grantBody(hijack, signPermission(hijack, attacker))),
+  );
+  assert.equal(res.status, 409);
 });
