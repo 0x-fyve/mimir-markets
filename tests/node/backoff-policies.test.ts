@@ -549,10 +549,11 @@ describe("computeBackoff", () => {
   it("annotates reason when consecutiveFailures exceeds maxConsecutiveDependencyFailures", () => {
     // pre-seed the counter past the max
     const policy = SYNC_BACKOFF; // maxConsecutive = 4
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       computeBackoff(worker, makeDepErr("rpc", i), policy);
     }
-    const r = computeBackoff(worker, makeDepErr("rpc", 4), policy);
+    // The fourth consecutive failure reaches the max.
+    const r = computeBackoff(worker, makeDepErr("rpc", 3), policy);
     assert.ok(
       r.reason.includes("consecutive=4 >= max=4"),
       `reason should warn on threshold breach: ${r.reason}`,
@@ -637,9 +638,15 @@ describe("withBackoff", () => {
   it("resolves undefined on PausedWorkerError without rethrow", async () => {
     let caught: unknown;
     try {
+      // A short paused_worker delay: the real policy sleeps five minutes, which
+      // would keep the test process alive long after the assertion ran.
+      const policy: BackoffPolicy = {
+        ...ORACLE_BACKOFF,
+        handlers: { ...ORACLE_BACKOFF.handlers, paused_worker: fixed(1, "test-paused") },
+      };
       await withBackoff(worker, async () => {
         throw new PausedWorkerError("paused", "oracle_settlement", 100);
-      }, { policy: ORACLE_BACKOFF });
+      }, { policy });
     } catch (e) {
       caught = e;
     }
@@ -722,25 +729,26 @@ describe("withBackoffAndMetrics", () => {
 
 describe("oracle policy regression: settlement pause must not retry", () => {
   it("PausedWorkerError resolves without retry", async () => {
-    const start = Date.now();
+    const err = new PausedWorkerError("oracle_settlement paused", "oracle_settlement", 300_000);
+    // The policy waits out the pause instead of retrying straight away.
+    const delay = computeBackoff("oracle-regression", err, ORACLE_BACKOFF);
+    assert.strictEqual(delay.ms, 300_000);
+
+    // withBackoff swallows the pause and resolves; a 1ms handler keeps the test
+    // from actually sleeping five minutes.
+    const policy: BackoffPolicy = {
+      ...ORACLE_BACKOFF,
+      handlers: { ...ORACLE_BACKOFF.handlers, paused_worker: fixed(1, "test-paused") },
+    };
     let caught: unknown;
     try {
       await withBackoff("oracle", async () => {
-        throw new PausedWorkerError(
-          "oracle_settlement paused",
-          "oracle_settlement",
-          300_000,
-        );
-      }, { policy: ORACLE_BACKOFF });
+        throw err;
+      }, { policy });
     } catch (e) {
       caught = e;
     }
     assert.strictEqual(caught, undefined);
-    const elapsed = Date.now() - start;
-    // The pause handler uses a 300s fixed delay, but our computeBackoff
-    // returns the full 300s for PausedWorkerError.  Verify it resolved rather
-    // than hanging (test would timeout otherwise).
-    assert.ok(elapsed < 500, `elapsed ${elapsed}ms — should be short in test`);
   });
 });
 
@@ -858,10 +866,11 @@ describe("boundary: consecutive-failure threshold", () => {
 
   it("warns in reason when consecutive equals max", () => {
     const policy = SYNC_BACKOFF; // maxConsecutive = 4
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       computeBackoff(worker, makeDepErr("rpc", i), policy);
     }
-    const r = computeBackoff(worker, makeDepErr("rpc", 4), policy);
+    // The fourth consecutive failure reaches the max.
+    const r = computeBackoff(worker, makeDepErr("rpc", 3), policy);
     assert.ok(r.reason.includes("consecutive=4 >= max=4"));
   });
 
