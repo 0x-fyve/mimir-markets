@@ -9,10 +9,9 @@ use crate::escrow;
 use crate::resolve;
 use crate::storage;
 use crate::types::{
-    Challenger, Claim, ClaimFeeView, CreateParams, Error, FeePolicy, MarketConfig, PayoutQuote,
-    PendingFeePolicy, PendingOracle, PlatformStats, WinnerSide,
     Challenger, ChallengerPage, Claim, ClaimFeeView, CreateParams, Error, FeePolicy, MarketConfig,
-    PayoutQuote, PendingFeePolicy, PlatformStats, Verdict, WinnerSide, MAX_BATCH_SIZE,
+    PayoutQuote, PendingFeePolicy, PendingOracle, PlatformStats, Verdict, WinnerSide,
+    MAX_BATCH_SIZE,
 };
 
 #[contract]

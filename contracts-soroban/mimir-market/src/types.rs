@@ -103,6 +103,21 @@ pub enum WinnerSide {
     Unresolvable = 4,
 }
 
+/// Outcome of validating a rematch child's link to its parent claim, cached
+/// under `DataKey::RematchParent(parent_id, child_id)`.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RematchStatus {
+    /// The parent exists, was in a rematchable state and is linked to this child.
+    Linked = 0,
+    /// The referenced parent claim does not exist (`Error::ParentClaimNotFound`).
+    ParentNotFound = 1,
+    /// The parent is not in a state that allows a rematch (`Error::ParentClaimInvalidState`).
+    ParentInvalidState = 2,
+    /// The parent already has a rematch child (`Error::ParentClaimAlreadyRematched`).
+    ParentAlreadyRematched = 3,
+}
+
 // ── Versioned verdict encoding ────────────────────────────────────────────────
 
 /// Current version of the on-chain verdict encoding.
@@ -408,4 +423,12 @@ pub enum Error {
     ParentClaimInvalidState = 44,
     /// The parent claim has already been used for a rematch (no duplicate rematches).
     ParentClaimAlreadyRematched = 45,
+    /// `get_claims_batch` was called with more than `MAX_BATCH_SIZE` ids. The
+    /// whole call is refused before any storage is read.
+    BatchTooLarge = 46,
+    /// A claim's escrow bookkeeping broke an accounting invariant (negative
+    /// escrow or stake, liability above stake, or more escrow than was taken
+    /// in). The write is refused so the contract never records an impossible
+    /// state.
+    ConservationViolation = 47,
 }

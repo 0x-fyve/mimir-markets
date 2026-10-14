@@ -46,3 +46,7 @@ mod test_settlement;
 mod test_verdict;
 #[cfg(test)]
 mod test_batch_read;
+#[cfg(test)]
+mod test_batch_get_claims;
+#[cfg(test)]
+mod test_rematch_status;

@@ -422,3 +422,31 @@ fn a_legacy_over_budget_claim_can_still_resolve() {
     assert_eq!(f.client().get_claim(&id).state, ClaimState::Resolved);
     assert_eq!(f.escrow_balance(), 0);
 }
+
+/// Resolution persists the versioned record itself, not only the claim mirror.
+#[test]
+fn resolution_persists_the_versioned_record() {
+    let f = Fixture::new(0, 0);
+    let id = resolved_claim(&f, Verdict::current(WinnerSide::Creator));
+    let stored = f
+        .env
+        .as_contract(&f.contract_id, || crate::storage::verdict(&f.env, id))
+        .expect("verdict record must be written at resolution");
+    assert_eq!(stored.version, VERDICT_VERSION_V1);
+    assert_eq!(stored.side, WinnerSide::Creator);
+}
+
+/// An unresolved claim has no verdict record and reports `ClaimNotResolved`.
+#[test]
+fn unresolved_claim_has_no_verdict_record() {
+    let f = Fixture::new(0, 0);
+    let id = active_claim(&f);
+    let stored = f
+        .env
+        .as_contract(&f.contract_id, || crate::storage::verdict(&f.env, id));
+    assert_eq!(stored, None);
+    assert_eq!(
+        f.client().try_get_verdict(&id).unwrap_err().unwrap(),
+        Error::ClaimNotResolved
+    );
+}
