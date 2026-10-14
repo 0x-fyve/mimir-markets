@@ -3,8 +3,8 @@
 
 extern crate std;
 
-use soroban_sdk::testutils::Address as _;
-use soroban_sdk::Address;
+use soroban_sdk::testutils::Events as _;
+use soroban_sdk::Event;
 
 use crate::test_common::{Fixture, DEFAULT_DURATION, USDC};
 use crate::types::{Error, RESULT_CANCELLED, SIDE_A, SIDE_B};
@@ -166,21 +166,17 @@ fn cancellation_publishes_the_correct_event() {
     let id = f.market(&captain, 0);
 
     f.client().deposit(&a1, &id, &SIDE_A, &(25 * USDC));
-
-    f.env.clear_auths();
-    f.env.mock_all_auths();
-
-    let mut events = f.env.events().all();
-    events.reverse();
-
     f.client().cancel_market(&id);
 
-    events = f.env.events().all();
-    events.reverse();
-
-    // The last event should be MarketCancelled
-    let last = &events[events.len() - 1];
-    assert_eq!(last.topics.len(), 2); // market_id and captain are topics
+    let expected = crate::events::MarketCancelled {
+        market_id: id,
+        captain: captain.clone(),
+        pool_a: 25 * USDC,
+        pool_b: 0,
+    }
+    .to_xdr(&f.env, &f.contract_id);
+    let emitted = f.env.events().all();
+    assert!(emitted.events().iter().any(|e| e == &expected));
 }
 
 // ── Negative: Authorization & state ──────────────────────────────────────────
@@ -189,17 +185,12 @@ fn cancellation_publishes_the_correct_event() {
 fn only_the_captain_can_cancel_a_market() {
     let f = Fixture::new();
     let captain = f.user(0);
-    let other = f.user(100 * USDC);
     let id = f.market(&captain, 0);
 
     f.env.set_auths(&[]);
-    let err = f
-        .client()
-        .try_cancel_market(&id)
-        .unwrap_err()
-        .unwrap();
-    // Soroban auth failure — captain didn't sign
-    assert_ne!(err, Error::AlreadyResolved);
+    // Soroban auth failure — captain didn't sign.
+    assert!(f.client().try_cancel_market(&id).is_err());
+    assert!(!f.client().get_market(&id).resolved);
 }
 
 #[test]
@@ -215,7 +206,7 @@ fn cancelling_an_already_resolved_market_fails() {
 
     // Advance past deadline and resolve
     f.advance_by(DEFAULT_DURATION);
-    f.client().resolve(&id, SIDE_A);
+    f.client().resolve(&id, &SIDE_A);
 
     // Try to cancel — should fail
     let err = f

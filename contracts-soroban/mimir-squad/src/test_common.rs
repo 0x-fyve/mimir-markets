@@ -27,6 +27,7 @@ pub struct Fixture {
     /// The asset contract behind [`Self::token_id`], kept so a test can reach
     /// its issuer: deauthorizing a balance is what a frozen trustline looks
     /// like to the pool, and it needs the issuer's `AUTH_REVOCABLE` flag.
+    #[allow(dead_code)]
     pub sac: StellarAssetContract,
 }
 

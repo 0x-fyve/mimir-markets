@@ -119,3 +119,67 @@ pub struct LiquidityRemoved {
     pub new_pool_total: i128,
     pub shares_burned: i128,
 }
+
+/// A captain cancelled a market before its deadline. Every depositor can pull
+/// a full refund through `claim`; the pools are kept as an audit trail.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarketCancelled {
+    #[topic]
+    pub market_id: u64,
+    #[topic]
+    pub captain: Address,
+    pub pool_a: i128,
+    pub pool_b: i128,
+}
+
+/// A payout could not be delivered (frozen or deauthorized trustline) and was
+/// parked for a later `claim_parked_payout`.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutParked {
+    #[topic]
+    pub market_id: u64,
+    #[topic]
+    pub side: u32,
+    #[topic]
+    pub participant: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleQueued {
+    #[topic]
+    pub next: Address,
+    pub executable_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleChanged {
+    #[topic]
+    pub next: Address,
+    pub previous: Address,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleCancelled {
+    pub cancelled: bool,
+}
+
+/// Emitted on the deposit that fills the squad to [`crate::types::MAX_SQUAD_MEMBERS`]
+/// total participants. Subsequent deposits from new addresses are rejected
+/// with [`crate::types::Error::SquadFull`] until existing members withdraw.
+///
+/// This event fires on the *last accepted* deposit rather than on the rejected
+/// attempt: Soroban discards all events emitted by a failed invocation, so a
+/// "cap hit" event can only be reliably indexed from a successful one.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SquadFull {
+    #[topic]
+    pub market_id: u64,
+    pub total_members: u32,
+}

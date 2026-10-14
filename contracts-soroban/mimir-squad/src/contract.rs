@@ -137,6 +137,21 @@ impl MimirSquad {
         storage::oracle(&env)
     }
 
+    /// Queue an oracle rotation; the current oracle must authorize.
+    pub fn queue_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        pool::queue_oracle(&env, new_oracle)
+    }
+
+    /// Drop a queued oracle rotation; the current oracle must authorize.
+    pub fn cancel_oracle(env: Env) -> Result<(), Error> {
+        pool::cancel_oracle(&env)
+    }
+
+    /// Apply a queued oracle rotation once its timelock has elapsed.
+    pub fn execute_oracle(env: Env) -> Result<(), Error> {
+        pool::execute_oracle(&env)
+    }
+
     pub fn get_pending_oracle(env: Env) -> Option<PendingOracle> {
         storage::pending_oracle(&env)
     }

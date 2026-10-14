@@ -2,7 +2,7 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::types::{Error, Market};
+use crate::types::{Error, Market, PendingOracle};
 
 #[contracttype]
 #[derive(Clone)]
