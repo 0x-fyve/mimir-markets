@@ -65,6 +65,35 @@ export function transferMessage(args: {
 }
 
 /**
+ * What a subscriber signs to follow or unfollow a basket.
+ *
+ * The action is part of the signed text, so a subscribe signature can never be
+ * presented as an unsubscribe (or the reverse), and the nonce plus a short
+ * expiry make each signature single-use. The address is interpolated
+ * VERBATIM: a Stellar strkey is case-sensitive base32. Shared by the route and
+ * the browser so both build the message byte for byte.
+ */
+export function subscriptionMessage(args: {
+  action: "subscribe" | "unsubscribe";
+  basketId: string;
+  subscriber: string;
+  perMarketUsdc: number;
+  nonce: string;
+  expiresAt: number;
+}): string {
+  return [
+    "Mimir basket subscription",
+    `action: ${args.action}`,
+    `basket: ${args.basketId}`,
+    `subscriber: ${args.subscriber}`,
+    `per market: ${args.perMarketUsdc} USDC`,
+    `nonce: ${args.nonce}`,
+    `expiresAt: ${new Date(args.expiresAt).toISOString()}`,
+    "Mimir never holds your funds. Every stake is signed by you.",
+  ].join("\n");
+}
+
+/**
  * The ids of curated baskets that ship with Mimir.
  *
  * Kept here (the pure computation module, no server-only dependency) so that
