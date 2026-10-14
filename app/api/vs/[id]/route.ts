@@ -32,6 +32,13 @@ export async function GET(
     }
 
     if (inviteKey) {
+      // Invite keys are guessable by brute force only if guesses are free.
+      const { authorizeRequest } = await import("@/lib/api/policy");
+      const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined;
+      const gate = authorizeRequest("public_read", { route: "/api/vs/[id]?invite", ip });
+      if (!gate.allowed && gate.error) {
+        return NextResponse.json(gate.error.body, { status: gate.error.status, headers: gate.error.headers });
+      }
       const privateItem = await getVsWithInvite(vsId, inviteKey);
       if (!privateItem) {
         const err = apiError("not_found", "VS not found");
