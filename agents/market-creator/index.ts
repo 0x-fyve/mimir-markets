@@ -68,6 +68,7 @@ import {
   marketsRemainingUnderCap,
   parseExposureCapPolicy,
   sumCreatorOpenExposure,
+  type CategoryExposureClaim,
 } from "../../lib/market-creator/exposure-caps";
 import {
   bumpCategoryUsage,
@@ -76,8 +77,13 @@ import {
   normalizeCategory,
   parseCategoryCapPolicy,
   summariseCreatorCaps,
-  type CategoryExposureClaim,
 } from "../../lib/market-creator/category-caps";
+import {
+  BackoffError,
+  CREATOR_BACKOFF,
+  describeBackoffError,
+  withBackoff,
+} from "../../lib/ops/backoff-policies";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const CONTRACT_ID         = requireMarketContractId();

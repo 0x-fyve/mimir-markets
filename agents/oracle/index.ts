@@ -88,7 +88,21 @@ import {
 } from "../../lib/stellar";
 import { fetchWithBudget, payingWalletFor } from "../../lib/x402/buyer";
 import { reportingPoll } from "../../lib/ops/heartbeat";
-import { isPaused } from "../../lib/ops/flags";
+import { isPaused, pauseState } from "../../lib/ops/flags";
+import {
+  DependencyFailureError,
+  ORACLE_BACKOFF,
+  describeBackoffError,
+  withBackoff,
+} from "../../lib/ops/backoff-policies";
+import {
+  classifySettlementError,
+  loadSettlementRetryConfig,
+  settlementRetryDecision,
+  settlementSnapshotIsReady,
+  type SettlementErrorInfo,
+  type SettlementRetryConfig,
+} from "../../lib/settlement-retry";
 // Explicit settlement outcome + named UNRESOLVABLE (refund) reasons (#99).
 import { applySettlementPolicy, describeDecision } from "../../lib/oracle/unresolvable-policy";
 import { unitsToUsdc, usdcToUnits, formatAtomicUsdc } from "../../lib/usdc";
