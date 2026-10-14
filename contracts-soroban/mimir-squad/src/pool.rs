@@ -454,8 +454,24 @@ pub fn cancel_market(env: &Env, market_id: u64) -> Result<(), Error> {
     if market.resolved {
         return Err(Error::AlreadyResolved);
     }
+    // Cancellation is a pre-deadline escape hatch only. Once the deadline has
+    // passed the outcome may be known, and a captain who is also a depositor
+    // must not be able to void a market they are about to lose; settlement then
+    // belongs to `resolve` / `transition_deadline`.
+    if env.ledger().timestamp() >= market.deadline {
+        return Err(Error::MarketClosed);
+    }
+
+    // Every deposit is refunded in full through `claim`, so the escrow owed to
+    // depositors is exactly both pools. Without this, refunds would draw down
+    // a zero balance and trip the conservation check, locking every deposit.
     market.resolved = true;
     market.result = RESULT_CANCELLED;
+    market.remaining_escrow = market
+        .pool_a
+        .checked_add(market.pool_b)
+        .ok_or(Error::Overflow)?;
+    assert_market_conservation(&market)?;
     storage::set_market(env, market_id, &market);
 
     events::MarketCancelled {

@@ -292,7 +292,7 @@ fn a_participant_with_no_deposit_cannot_claim_from_a_cancelled_market() {
 }
 
 #[test]
-fn cancellation_works_at_the_deadline_timestamp() {
+fn cancellation_is_rejected_at_the_deadline_timestamp() {
     let f = Fixture::new();
     let captain = f.user(0);
     let a1 = f.user(100 * USDC);
@@ -300,16 +300,52 @@ fn cancellation_works_at_the_deadline_timestamp() {
 
     f.client().deposit(&a1, &id, &SIDE_A, &(10 * USDC));
 
-    // Advance exactly to the deadline
+    // Advance exactly to the deadline: the outcome may now be known.
     f.advance_by(DEFAULT_DURATION);
 
-    // Cancellation should still work before resolution is called
-    f.client().cancel_market(&id);
-    assert_eq!(f.client().get_market(&id).result, RESULT_CANCELLED);
+    let err = f.client().try_cancel_market(&id).unwrap_err().unwrap();
+    assert_eq!(err, Error::MarketClosed);
+    assert!(!f.client().get_market(&id).resolved);
+}
 
-    // Can claim refund
-    let refund = f.client().claim(&a1, &id, &SIDE_A);
-    assert_eq!(refund, 10 * USDC);
+#[test]
+fn a_captain_depositor_cannot_cancel_a_losing_market_after_the_deadline() {
+    let f = Fixture::new();
+    let captain = f.user(100 * USDC);
+    let b1 = f.user(100 * USDC);
+    let id = f.market(&captain, 0);
+
+    f.client().deposit(&captain, &id, &SIDE_A, &(40 * USDC));
+    f.client().deposit(&b1, &id, &SIDE_B, &(40 * USDC));
+    f.advance_by(DEFAULT_DURATION + 3_600);
+
+    let err = f.client().try_cancel_market(&id).unwrap_err().unwrap();
+    assert_eq!(err, Error::MarketClosed);
+
+    // Settlement still runs normally and pays the winner.
+    f.client().resolve(&id, &SIDE_B);
+    assert_eq!(f.client().claim(&b1, &id, &SIDE_B), 80 * USDC);
+    assert_eq!(f.escrow_balance(), 0);
+}
+
+#[test]
+fn cancel_seeds_remaining_escrow_with_both_pools() {
+    let f = Fixture::new();
+    let captain = f.user(0);
+    let a1 = f.user(100 * USDC);
+    let b1 = f.user(100 * USDC);
+    let id = f.market(&captain, 0);
+
+    f.client().deposit(&a1, &id, &SIDE_A, &(20 * USDC));
+    f.client().deposit(&b1, &id, &SIDE_B, &(30 * USDC));
+    f.client().cancel_market(&id);
+    assert_eq!(f.client().get_market(&id).remaining_escrow, 50 * USDC);
+
+    f.client().claim(&a1, &id, &SIDE_A);
+    assert_eq!(f.client().get_market(&id).remaining_escrow, 30 * USDC);
+    f.client().claim(&b1, &id, &SIDE_B);
+    assert_eq!(f.client().get_market(&id).remaining_escrow, 0);
+    assert_eq!(f.escrow_balance(), 0);
 }
 
 #[test]
