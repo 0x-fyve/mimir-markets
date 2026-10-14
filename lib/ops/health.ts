@@ -95,10 +95,12 @@ export interface HealthSnapshot {
   /** Research source fetches — a soft dependency, so warn only. */
   sources: FailureWindow;
   /**
-   * Decimal USDC balances for the worker agents.
-   * Keyed by the worker role (e.g., "oracle").
+   * Decimal USDC balances for the worker agents, keyed by the worker role
+   * (e.g., "oracle"). `null` means the agent has no account or trustline.
+   * Optional: collectors that do not read balances (the public status
+   * surface, fault-injection profiles) omit it and raise no balance alarms.
    */
-  agentBalancesUsdc: Record<string, number | null>;
+  agentBalancesUsdc?: Record<string, number | null>;
 }
 
 export interface Thresholds {
@@ -359,7 +361,7 @@ export function evaluateHealth(
   );
   if (sources) alarms.push(sources);
 
-  for (const [name, balance] of Object.entries(snapshot.agentBalancesUsdc)) {
+  for (const [name, balance] of Object.entries(snapshot.agentBalancesUsdc ?? {})) {
     if (balance === null) {
       alarms.push({
         id: `agent.${name}.untrusted`,
@@ -402,7 +404,7 @@ export function evaluateHealth(
       sourceFailureRatio: failureRatio(snapshot.sources),
       workerAgesSec,
       workerTraceIds,
-      agentBalancesUsdc: { ...snapshot.agentBalancesUsdc },
+      agentBalancesUsdc: { ...(snapshot.agentBalancesUsdc ?? {}) },
     },
   };
 }

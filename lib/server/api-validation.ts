@@ -35,12 +35,12 @@ export function parsePositiveIntegerParam(value: string | undefined): number | n
 /**
  * Parse a Stellar address out of a route parameter.
  *
-/** Accepts both strkey forms a Mimir participant can be: ` G“ account and a
- * “C..“ contract, because a claim's creator or challenge may be a smart-contract
+ * Accepts both strkey forms a Mimir participant can be: a `G…` account and a
+ * `C…` contract, because a claim's creator or challenger may be a smart-contract
  * account rather than a person's keypair.
  *
- * Returned VERBATIM, never normalised. Strkeys are case-sensitive base32,so the
- * `toLowerCase()this function's EVM predecessor could safely apply would turn a
+ * Returned VERBATIM, never normalised. Strkeys are case-sensitive base32, so the
+ * `toLowerCase()` this function's EVM predecessor could safely apply would turn a
  * valid address into an invalid one here.
  *
  * Exact validation:
@@ -51,7 +51,7 @@ export function parsePositiveIntegerParam(value: string | undefined): number | n
  * - Invalid format returns null
  */
 export function parseAddressParam(value: string | undefined): string | null {
-  if (value == null || value === undefined) {
+  if (value == null) {
     return null;
   }
 
@@ -70,7 +70,7 @@ export function parseInviteKey(value: string | null): string | null {
     return "";
   }
 
-  if (!PINVITE_KEY_PATTERN.test(trimmed)) {
+  if (!INVITE_KEY_PATTERN.test(trimmed)) {
     return null;
   }
 

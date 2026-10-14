@@ -31,7 +31,7 @@ test("a successful transaction is reported as succeeded", async () => {
 
 test("a failed transaction is neither succeeded nor pending", async () => {
   const out = await waitForTransaction(HASH, {
-    server: stub({ status: rpc.Api.GetTransactionStatus.FAIL }),
+    server: stub({ status: rpc.Api.GetTransactionStatus.FAILED }),
   });
   assert.equal(out.succeeded, false);
   assert.equal(out.pending, false);

@@ -17,7 +17,6 @@
  */
 import { Horizon, rpc, StrKey } from "@stellar/stellar-sdk";
 import type { SignAuthEntry, SignTransaction } from "@stellar/stellar-sdk/contract";
-import type { DependencyHealthCategory } from "./types";
 
 // ── Env plumbing ──────────────────────────────────────────────────────────────
 
@@ -48,6 +47,14 @@ function cleanEnv(raw: string | undefined): string | undefined {
  * - `cancelled`: A pending transaction or claim was explicitly cancelled by the user.
  * - `dependency-failure`: A downstream dependency (e.g., USDC SAC, Horizon) is unreachable.
  */
+export type DependencyHealthCategory =
+  | "invalid"
+  | "stale"
+  | "duplicated"
+  | "cancelled"
+  | "dependency-failure"
+  | "unknown";
+
 export function mapHealthToCategory(status: string): DependencyHealthCategory {
   switch (status) {
     case "invalid":

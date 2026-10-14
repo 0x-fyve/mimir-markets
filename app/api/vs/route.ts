@@ -29,16 +29,12 @@ export async function GET(request: Request) {
     const limit = limitValue ? Number(limitValue) : undefined;
 
     if (cursor !== undefined && (isNaN(cursor) || cursor <= 0)) {
-      return NextResponse.json(
-        createApiError("invalid_parameter", "cursor must be a positive integer"),
-        { status: 400 }
-      );
+      const err = apiError("invalid_request", "cursor must be a positive integer", { field: "cursor" });
+      return NextResponse.json(err.body, { status: err.status, headers: err.headers });
     }
     if (limit !== undefined && (isNaN(limit) || limit <= 0 || limit > 100)) {
-      return NextResponse.json(
-        createApiError("invalid_parameter", "limit must be between 1 and 100"),
-        { status: 400 }
-      );
+      const err = apiError("invalid_request", "limit must be between 1 and 100", { field: "limit" });
+      return NextResponse.json(err.body, { status: err.status, headers: err.headers });
     }
 
     const { items, cache, nextCursor } = await getVsFeedSnapshot({
