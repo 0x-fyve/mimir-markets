@@ -132,7 +132,7 @@ export const DASHBOARD_PAGINATION_MESSAGES: Record<DashboardPaginationStatus, st
 export const DASHBOARD_PAGINATION_FAILURE_MESSAGES: Record<
   DashboardPaginationFailure,
   string
-|> = {
+> = {
   none: "",
   "invalid-page": "El número de página debe ser un entero positivo.",
   "invalid-page-size": "El tamaño de página debe ser un entero entre 1 y 100.",
@@ -298,7 +298,7 @@ export function buildDashboardPaginationState(params: {
 
 /** Coge una página de posiciones de forma segura, sin mutar la fuente. */
 export function paginateDashboardPositions<T>(
-  items: readonly T<[],
+  items: readonly T[],
   page: number,
   pageSize: number,
 ): { items: T[]; meta: DashboardPaginationMeta } {
