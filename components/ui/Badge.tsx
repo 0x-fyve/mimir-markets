@@ -1,4 +1,4 @@
-" use client ";
+"use client";
 
 import { useTranslations } from "next-intl";
 
@@ -13,12 +13,12 @@ interface BadgeProps {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  open:     "pv-cyan",
+  open:      "pv-cyan",
   accepted:  "pv-fuch",
   resolved:  "pv-emerald",
-  won:      "pv-emerald",
+  won:       "pv-emerald",
   lost:      "pv-danger",
-  draw:     "pv-muted",
+  draw:      "pv-muted",
   cancelled: "zinc-500",
   // Copy-trading specific statuses
   active:    "pv-emerald",
@@ -44,7 +44,7 @@ export default function Badge({
   ariaLabel,
 }: BadgeProps) {
   const t = useTranslations("badges");
-  const color  = STATUS_COLORS[status] ?? "pv-muted";
+  const color   = STATUS_COLORS[status] ?? "pv-muted";
   const classes = colorMap[color] ?? colorMap["pv-muted"];
   
   // Fallback to status string if translation key is missing
@@ -55,10 +55,10 @@ export default function Badge({
     <span
       className={`inline-flex items-center gap-1.5 border font-bold uppercase tracking-[0.1em] rounded ${classes} ${
         compact
-          ? "px-2 py-0.5 text[9px]"
+          ? "px-2 py-0.5 text-[9px]"
           : large
-            ? "px-3 py-1.5 text[11px]"
-            : "px-2.5 py-1 text[10px]"
+            ? "px-3 py-1.5 text-[11px]"
+            : "px-2.5 py-1 text-[10px]"
       }`}
       aria-label={labelToRender}
     >

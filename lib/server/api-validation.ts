@@ -1,4 +1,4 @@
-import { StrKey } from "@stellar/stellar-sdk;
+import { StrKey } from "@stellar/stellar-sdk";
 
 export const INVITE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
