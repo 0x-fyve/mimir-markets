@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 
 import { getFeePolicy } from "@/lib/contract";
 import { FEE_SCHEDULE } from "@/lib/fees";
-import { Skeleton } from "@/components/ui/Skeleton";
+import Skeleton from "@/components/ui/Skeleton";
 
 export type FeeBreakdownContext = "agent" | "basket" | "follow";
 

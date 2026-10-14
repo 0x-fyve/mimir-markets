@@ -77,6 +77,9 @@ export const DASHBOARD_EXPOSURE_PAGE_SIZE = 5;
 /** Filas añadidas en cada “Load more” (legacy, mantenido para compatibilidad). */
 export const DASHBOARD_EXPOSURE_LOAD_MORE = 5;
 
+/** Máximo de filas visibles por "Load more" en una página de Active Exposure. */
+export const DASHBOARD_EXPOSURE_PAGE_SIZE_MAX = 100;
+
 /** Máximo de páginas permitidas para evitar valores de URL absurdos. */
 export const DASHBOARD_EXPOSURE_MAX_PAGE = 10_000;
 

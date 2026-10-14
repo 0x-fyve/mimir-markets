@@ -20,8 +20,8 @@ function clampPageSize(value: number | undefined): number {
   return integer;
 }
 
-function formatUsdc(atomic: string | undefined): string {
-  if (!atomic) return "—";
+function formatUsdc(atomic: string | bigint | undefined): string {
+  if (atomic === undefined || atomic === "") return "—";
   const parsed = Number(atomic);
   if (!Number.isFinite(parsed)) return "—";
   return (parsed / 1_000_000).toFixed(2);
@@ -33,7 +33,7 @@ export function VirtualBasketCard({ weights, snapshots, pageSize }: VirtualBaske
   const maxDrawdown = snapshots.reduce((max, point) => Math.max(max, point.drawdownBps), 0);
 
   const size = clampPageSize(pageSize);
-  const totalPages = Math.max(1, Math.ceiling(weights.length / size));
+  const totalPages = Math.max(1, Math.ceil(weights.length / size));
   const page = 1;
   const start = (page - 1) * size;
   const visibleWeights = weights.slice(start, start + size);

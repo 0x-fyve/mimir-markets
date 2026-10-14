@@ -27,7 +27,6 @@ import AccountBalances from "@/components/wallet/AccountBalances";
 import DashboardKpiSkeletonRow from "@/components/dashboard/DashboardKpiSkeletonRow";
 import PortfolioPerformancePanel from "@/components/dashboard/PortfolioPerformancePanel";
 import DashboardVSFilterBar from "@/components/dashboard/DashboardVSFilterBar";
-import DashboardPositionsPagination from "@/components/dashboard/DashboardPositionsPagination";
 import CacheFreshnessPill from "@/components/CacheFreshnessPill";
 import StaleIndexWarning from "@/components/StaleIndexWarning";
 import { useDashboardFilterUrlState } from "@/hooks/useDashboardFilterUrlState";
@@ -152,6 +151,9 @@ export default function DashboardPageClient() {
         // The dashboard shows the user's own positions; underdog is a discovery
         // filter for the explorer, not a lens on markets you are already in.
         underdogOnly: false,
+        // `view` only drives the explorer tabs; the dashboard tab filter above
+        // already decided which states are shown.
+        view: "open",
       }),
     [tabFiltered, categoryFilter, minStakeFilter, searchQuery]
   );
@@ -166,12 +168,6 @@ export default function DashboardPageClient() {
     return filtered.slice(start, start + DASHBOARD_POSITIONS_PAGE_SIZE);
   }, [filtered, safePage]);
 
-  // Reset to page 1 whenever the filter inputs change so the user never lands
-  // on an out-of-range page after narrowing the result set.
-  useEffect(() => {
-    setPage(1);
-  }, [exposureFilterKey]);
-
   // Clamp the page if the result set shrinks below the current page (e.g. a
   // position resolves and drops out of the active tab).
   useEffect(() => {
@@ -182,6 +178,12 @@ export default function DashboardPageClient() {
     () => `${tab}-${searchQuery}-${categoryFilter}-${minStakeFilter}`,
     [tab, searchQuery, categoryFilter, minStakeFilter]
   );
+
+  // Reset to page 1 whenever the filter inputs change so the user never lands
+  // on an out-of-range page after narrowing the result set.
+  useEffect(() => {
+    setPage(1);
+  }, [exposureFilterKey]);
 
   const showStakeHoldingsMocks = useMemo(
     () => shouldShowDashboardStakeHoldingsMocks(duels),
@@ -473,15 +475,10 @@ export default function DashboardPageClient() {
               onRefresh={() => {
                 void loadDuels({ forceRefresh: true });
               }}
-            />
-          }
-          stakeHoldingsFooterExtra={
-            <DashboardPositionsPagination
               page={safePage}
-              totalPages={totalPages}
-              totalItems={filtered.length}
-              pageSize={DASHBOARD_POSITIONS_PAGE_SIZE}
+              pageCount={totalPages}
               onPageChange={setPage}
+              totalCount={filtered.length}
             />
           }
         />
