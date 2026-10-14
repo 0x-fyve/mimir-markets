@@ -1,6 +1,6 @@
-import { copyPolicyHash, validateCopyPermission, worstCaseCopySpend, type CopyPermission } from "@{/lib/copy-trading;";
-import { getCopyPermission, listCopyExecutions, saveCopyPermission } from "@{lib/db};
-import { verifyAgentSignature } from "@{lib/agents/signature};
+import { copyPolicyHash, validateCopyPermission, worstCaseCopySpend, type CopyPermission } from "@/lib/copy-trading";
+import { getCopyPermission, listCopyExecutions, saveCopyPermission } from "@/lib/db";
+import { verifyAgentSignature } from "@/lib/agents/signature";
 
 export const dynamic = "force-dynamic";
 
@@ -31,10 +31,10 @@ export async function POST(req: Request): Promise<Response> {
     spendPermission: Omit<CopyPermission["spendPermission"], "allowanceAtomic"> & { allowanceAtomic: string | bigint };
   };
   // A Stellar signature is base64, not 0x-prefixed hex - `verifyAgentSignature`
-  // takes a plain `string`, and the `0x${string}` this used to declared described
+  // takes a plain `string`, and the `0x${string}` this used to declare described
   // a shape no Stellar client can send.
   let body: { permission?: JsonPermission; signature?: string };
-  try { body = await req.json(); } catch { return Response.json({ error: "invalid JSON }, { status: 400 }); }
+  try { body = await req.json(); } catch { return Response.json({ error: "invalid JSON" }, { status: 400 }); }
   if (!body.permission || !body.signature) return Response.json({ error: "permission and signature required" }, { status: 400 });
   let permission: Omit<CopyPermission, "signedPolicyHash">;
   try {
