@@ -27,9 +27,10 @@ test.describe("wallet-gated money paths", () => {
       page.getByRole("button", { name: /create & fund/i }),
     ).toHaveCount(0);
 
-    // The connect control is the only way forward.
+    // The connect control is the only way forward. Scoped to the page body:
+    // the header's own connect button is also labelled "Connect wallet".
     await expect(
-      page.getByRole("button", { name: /connect wallet/i }),
+      page.getByRole("main").getByRole("button", { name: /connect wallet/i }),
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
@@ -50,7 +51,12 @@ test.describe("wallet-gated money paths", () => {
     trackPageErrors(page, errors);
 
     await page.goto("/en/explorer", { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    // The header button shows "Connect" and is labelled "Connect wallet" for
+    // screen readers; only the viewport's visible variant is in the a11y tree.
+    await page
+      .getByRole("banner")
+      .getByRole("button", { name: "Connect wallet", exact: true })
+      .click();
 
     const dialog = page.getByRole("dialog", { name: "Connect wallet" });
     await expect(dialog).toBeVisible();
