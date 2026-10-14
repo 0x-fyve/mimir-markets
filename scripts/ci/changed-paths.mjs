@@ -56,6 +56,8 @@ const PREFIX_SCOPES = [
 
   ["tests/", "tests"],
   ["scripts/", "tests"],
+  // Replay and contract fixtures are read by node tests and release readiness.
+  ["fixtures/", "tests"],
   [".github/", "tests"],
 ];
 

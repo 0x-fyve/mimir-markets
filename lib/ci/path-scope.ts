@@ -47,6 +47,8 @@ export const PREFIX_SCOPES: ReadonlyArray<readonly [string, Tier]> = [
 
   ["tests/", "tests"],
   ["scripts/", "tests"],
+  // Replay and contract fixtures are read by node tests and release readiness.
+  ["fixtures/", "tests"],
   [".github/", "tests"],
 ];
 
