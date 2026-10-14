@@ -39,29 +39,17 @@ export function parsePositiveIntegerParam(value: string | undefined): number | n
  * `C…` contract, because a claim's creator or challenger may be a smart-contract
  * account rather than a person's keypair.
  *
- * Returned VERBATIM, never normalised. Strkeys are case-sensitive base32, so the
- * `toLowerCase()` this function's EVM predecessor could safely apply would turn a
- * valid address into an invalid one here.
- *
- * Exact validation:
- * - Account addresses must begin with 'G'
- * - Contract addresses must begin with 'C'
- * - No trimming or normalization is performed on the input value before validation
- * - Null or undefined inputs return null
- * - Invalid format returns null
+ * Returned VERBATIM apart from surrounding whitespace, never case-normalised.
+ * Strkeys are case-sensitive base32, so the `toLowerCase()` this function's EVM
+ * predecessor could safely apply would turn a valid address into an invalid one.
  */
 export function parseAddressParam(value: string | undefined): string | null {
-  if (value == null) {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (!StrKey.isValidEd25519PublicKey(trimmed) && !StrKey.isValidContract(trimmed)) {
     return null;
   }
-
-  // Exact match: no trimming, no normalization
-  // Stellar StrKeys are case-sensitive base32
-  if (!StrKey.isValidEd25519PublicKey(value) && !StrKey.isValidContract(value)) {
-    return null;
-  }
-
-  return value;
+  return trimmed;
 }
 
 export function parseInviteKey(value: string | null): string | null {
