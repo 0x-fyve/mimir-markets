@@ -398,7 +398,6 @@ export async function waitForTransaction(
     const response = await server.pollTransaction(hash, { attempts: opts.attempts ?? 12 });
     const status = response.status;
     const succeeded = status === rpc.Api.GetTransactionStatus.SUCCESS;
-    const failed = status === rpc.Api.GetTransactionStatus.FAIL;
     const notFound = status === rpc.Api.GetTransactionStatus.NOT_FOUND;
 
     return {
@@ -406,44 +405,6 @@ export async function waitForTransaction(
       status,
       succeeded,
       pending: notFound,
-      explorerUrl,
-      response,
-    };
-  } catch {
-    return {
-      hash,
-      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
-      succeeded: false,
-      pending: true,
-      explorerUrl,
-      response: null,
-    };
-  }
-}
-
-/**
- * Wait for a submitted transaction to land.
- *
- * Stellar closes a ledger every ~5s and a transaction is final the moment it is
- * included — there are no reorgs and no confirmation count to wait for, so a
- * single `pollTransaction` is the whole story. A budget that expires is reported
- * as `pending` rather than thrown: the transaction may still be in flight and a
- * caller must not tell the user it failed.
- */
-export async function waitForTransaction(
-  hash: string,
-  opts: { attempts?: number; server?: rpc.Server } = {},
-): Promise<StellarTxOutcome> {
-  const server = opts.server ?? createSorobanRpcServer();
-  const explorerUrl = getExplorerTxUrl(hash);
-  try {
-    const response = await server.pollTransaction(hash, { attempts: opts.attempts ?? 12 });
-    const succeeded = response.status === rpc.Api.GetTransactionStatus.SUCCESS;
-    return {
-      hash,
-      status: response.status,
-      succeeded,
-      pending: response.status === rpc.Api.GetTransactionStatus.NOT_FOUND,
       explorerUrl,
       response,
     };
