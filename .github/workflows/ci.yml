@@ -72,8 +72,24 @@ jobs:
       - run: npm ci
       - name: Verify lockfile reproducibility
         run: git diff --exit-code package-lock.json
-      - run: npm audit --omit=dev --audit-level=high
+      # Production dependency triage (docs/DEPENDENCY_AUDIT.md): npm audit only
+      # collects; the checker decides and fails closed on high/critical/unknown.
+      - name: Audit production dependencies
         if: matrix.tier != 'contracts'
+        run: |
+          set -uo pipefail
+          npm audit --omit=dev --json > npm-audit.json || true
+          node --import tsx scripts/check-npm-audit.ts --json npm-audit.json --out npm-audit-report.md
+      - name: Upload dependency audit evidence
+        if: always() && matrix.tier != 'contracts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-${{ matrix.tier }}-${{ github.run_id }}
+          path: |
+            npm-audit.json
+            npm-audit-report.md
+          if-no-files-found: ignore
+          retention-days: 14
       - run: npm run check:terms
       - run: npm run check:toolchains
       - run: npm run check:schema-snapshot
