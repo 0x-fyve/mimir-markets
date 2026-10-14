@@ -173,12 +173,12 @@ export interface DelayResult {
 
 export type DelayFn = (err: BackoffError, consecutiveFailures: number) => DelayResult;
 
-const skip: DelayFn = (_err, _consecutive) => ({ ms: 0, reason: "skip" });
+export const skip: DelayFn = (_err, _consecutive) => ({ ms: 0, reason: "skip" });
 
-const fixed = (ms: number, label: string): DelayFn =>
+export const fixed = (ms: number, label: string): DelayFn =>
   () => ({ ms, reason: label });
 
-const exponentialWithJitter = (baseMs: number, capMs: number): DelayFn =>
+export const exponentialWithJitter = (baseMs: number, capMs: number): DelayFn =>
   (_err, consecutive) => {
     const exp = Math.min(consecutive, 10);
     const ceiling = Math.min(baseMs * Math.pow(2, exp), capMs);

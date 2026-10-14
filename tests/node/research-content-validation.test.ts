@@ -108,6 +108,7 @@ function makeSuccess(
     bytes: Buffer.byteLength(body),
     fromCache: overrides.fromCache ?? false,
     redirects: overrides.redirects ?? 0,
+    redirectChain: ["https://coingecko.com/en/coins/bitcoin"],
   };
 }
 

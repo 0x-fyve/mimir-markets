@@ -7,7 +7,7 @@
  * Run: node --import tsx --test tests/node/backoff-policies.test.ts
  */
 
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -560,7 +560,6 @@ describe("computeBackoff", () => {
   });
 
   it("falls back to skip for an unknown error kind", () => {
-    // @ts-expect-error — testing unknown kind path
     const err = new BackoffError("unknown_kind", "surprise");
     const r = computeBackoff(worker, err, ORACLE_BACKOFF);
     assert.strictEqual(r.ms, 0);
