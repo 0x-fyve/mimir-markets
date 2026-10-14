@@ -229,7 +229,11 @@ async function handleAgentApiPost(
   context: { params: Promise<{ action: string }> },
 ): Promise<Response> {
   const { action: rawAction } = await context.params;
-  if (!(AGENT_API_ACTIONS as readonly string[]).includes(rawAction)) return json({ error: { message: "unknown action", requestId } }, 404);
+  // Correlates the early rejections below, which happen before an agent is known.
+  const requestId = randomUUID();
+  if (!(AGENT_API_ACTIONS as readonly string[]).includes(rawAction)) {
+    return errorResponse(withRequestId(apiError("not_found", "unknown action"), requestId));
+  }
   const action = rawAction as AgentApiAction;
   // Cap before parse: Content-Length is a cheap fail-closed gate; the body byte
   // check below still applies when the header is absent or wrong.
@@ -284,7 +288,7 @@ async function handleAgentApiPost(
   if (request.action !== action) return json({ error: { message: "action/path mismatch" } }, 400);
   const envelopeErrors = validateAgentRequestEnvelope(request, Date.now(), { requireSignature: !viaApiKey });
   if (envelopeErrors.length) return json({ error: { message: envelopeErrors.join("; ") } }, 400);
-  
+
   // Drift check: validate the request body shape against the schema spec.
   const shapeResult = validateAgentApiRequest(request);
   if (!shapeResult.ok) {
@@ -397,17 +401,6 @@ async function handleAgentApiPost(
     const keyId = String(body.keyId ?? "");
     if (!keyId) return json({ error: { message: "keyId is required" } }, 400);
     const revoked = await revokeAgentApiKey(agent.agentId, keyId, Date.now(), String(body.reason ?? "owner revoked"));
-    if (!revoked) return json({ error: { message: "key not found" } }, 404);
-    result = { revoked: true };
-  } else if (action === "heartbeat") {
-    await saveAgent({ ...agent, updatedAt: Date.now() });
-    result = { ok: true };
-  } else if (action === "listPositions") {
-    // Placeholder for position listing logic
-    result = { positions: [] };
-  } else if (action === "listEarnings") {
-    const summary = await getAgentEarningsSummary(agent.agentId);
-    result = { earnings: summary };
     if (!revoked) return json({ error: { message: "key not found or already revoked" } }, 404);
     result = { keyId, revoked: true };
   } else if (action === "rotateKey") {
@@ -529,76 +522,77 @@ async function handleAgentApiPost(
     const revoked = revokeAgent(agent, { requestedBy: agent.ownerWallet, reason: String(body.reason ?? "owner revoked") });
     if (!revoked.ok) return json({ error: { message: revoked.reason } }, 403);
     await saveAgent(revoked.agent); result = { agent: revoked.agent };
-  } else if (action === "fetchResearch") {
-    const gate = authorizeAction(agent, { capability: "researcher", requestsThisHour: Number(body.requestsThisHour ?? 0) });
-    if (!gate.allowed) {
-      await audit(request, "rejected", gate.reason);
-      return json({ error: { message: gate.reason, detail: gate.detail } }, 403);
-    }
-    const adapterId = typeof body.adapterId === "string" ? body.adapterId : "";
-    const url = typeof body.url === "string" ? body.url : "";
-    if (!url || !adapterId) {
-      return errorResponse(apiError("invalid_request", "url and adapterId are required"));
-    }
-    const fetchRes = await fetchWithAdapter(adapterId, { url, agentId: agent.agentId });
-    if (!fetchRes.ok) {
-      if (fetchRes.kind === "adapter") return errorResponse(apiError("invalid_request", fetchRes.detail));
-      let code: ApiErrorCode;
-      switch (fetchRes.kind) {
-        case "paused": code = "agent_paused"; break;
-        case "blocked": code = "forbidden"; break;
-        case "budget": code = "budget_exhausted"; break;
-        case "too_many_redirects":
-        case "redirect_loop":
-        case "invalid_redirect":
-        case "protocol_downgrade":
-        case "content_type":
-        case "too_large":
-        case "http_error":
-          code = "invalid_request"; break;
-        case "cancelled":
-        case "dependency_failure":
-        case "transport":
-          code = "upstream_unavailable"; break;
-      }
-      return errorResponse(apiError(code, fetchRes.detail));
-    }
-    result = {
-      ok: true,
-      url: fetchRes.url,
-      finalUrl: fetchRes.finalUrl,
-      status: fetchRes.status,
-      contentType: fetchRes.contentType,
-      body: fetchRes.body,
-      contentHash: fetchRes.contentHash,
-      capturedAt: fetchRes.capturedAt,
-      bytes: fetchRes.bytes,
-      fromCache: fetchRes.fromCache,
-      redirects: fetchRes.redirects,
-      redirectChain: fetchRes.redirectChain,
-      budget: budgetRemaining(agent.agentId),
-    };
   } else if (action === "publishReasoning") {
-    await publishReasoning(agent.agentId, body.reasoning);
-    result = { published: true };
-  } else if (action === "revoke") {
-    await revokeAgent(agent.agentId, Date.now(), String(body.reason ?? "owner revoked"));
-    result = { revoked: true };
     const gate = authorizeAction(agent, { capability: "researcher", requestsThisHour: Number(body.requestsThisHour ?? 0) });
     if (!gate.allowed) {
       await audit(request, "rejected", gate.reason);
-      return json({ error: { message: gate.reason, detail: gate.detail } }, 403);
+      return errorResponse(actionVerdictToError(gate, "researcher"));
     }
     result = await publishReasoning({ ...(body as any), agentId: agent.agentId });
   } else {
-    return json({ error: { message: "unknown action" } }, 404);
+    const capability: AgentCapability = action === "proposeMarket" || action === "createMarket" || action === "dryRun"
+      ? "market_creator" : "council_juror";
+    const proposalOnly = action === "proposeMarket";
+    const gate = authorizeAction(agent, {
+      capability, category: body.category, settlementMode: body.settlementMode,
+      positionAtomic: parseUsdcAtomic(String(body.positionUsdc ?? body.stakeUsdc ?? 0)).toString(),
+      exposureTodayAtomic: parseUsdcAtomic(String(body.exposureTodayUsdc ?? 0)).toString(),
+      activeMarkets: Number(body.activeMarkets ?? 0), requestsThisHour: Number(body.requestsThisHour ?? 0),
+      proposalOnly,
+    } as any);
+    if (!gate.allowed) return json({ error: { message: gate.reason, detail: gate.detail } }, 403);
+    if (action === "dryRun") {
+      // ── What "allowance" means now ──────────────────────────────────────────
+      // The EVM version read the ERC-20 allowance the agent had granted the
+      // market contract, because a stake could not land without one. Soroban has
+      // no standing allowance on this path: `challenge_claim` carries auth for
+      // exactly the staked amount, so there is nothing to pre-approve and an
+      // allowance read would always be zero and always look like a blocker.
+      //
+      // The question the dry run is actually asking — "would this stake go
+      // through?" — is now answered by the agent's own USDC BALANCE, so that is
+      // what is reported. Null (no trustline) is deliberately surfaced as zero:
+      // an account with no trustline genuinely cannot stake.
+      let spendable = 0n;
+      if (isMarketConfigured()) {
+        try {
+          spendable = (await getUsdcBalanceUnits(agent.operatorWallet)) ?? 0n;
+        } catch { /* report zero; dry-run stays safe */ }
+      }
+      result = buildAgentDryRun({
+        principalUsdc: Number(body.principalUsdc ?? body.stakeUsdc ?? 0),
+        grossPayoutUsdc: Number(body.grossPayoutUsdc ?? body.stakeUsdc ?? 0),
+        outcome: body.outcome ?? "creator_wins", allowanceAtomic: spendable,
+        requiredAtomic: usdcToUnits(Number(body.stakeUsdc ?? body.positionUsdc ?? 0)),
+        platformFeeBps: Number(body.platformFeeBps ?? 0),
+        agentOwnerFeeBps: Number(body.agentOwnerFeeBps ?? 0),
+        platformRecipient: String(body.platformRecipient ?? agent.ownerWallet),
+        ownerRecipient: agent.payoutWallet, policy: gate,
+      });
+    } else result = action === "proposeMarket"
+      ? { disposition: "review", proposal: body, moderationRequired: true }
+      : {
+          allowed: true, simulated: false, contract: getMarketContractId(),
+          // Stellar has no numeric chain id. The network passphrase is the
+          // equivalent domain separator — it is what every Stellar signature is
+          // bound to at the protocol level — so it is what a caller needs in order
+          // to build a transaction this deployment will accept. The short name is
+          // sent alongside it because that is the readable half.
+          network: STELLAR_NETWORK,
+          networkPassphrase: NETWORK_PASSPHRASE,
+          requiresExternalWalletSignature: true,
+          contractConfigured: isMarketConfigured(),
+          // The contract freezes the fee recipient onto the claim at creation, so a
+          // market opened without one can never pay this agent's owner — however
+          // the policy changes later. Handed back explicitly so a caller cannot omit
+          // it by accident and silently forfeit its own revenue.
+          agentOwnerRecipient: agent.payoutWallet,
+          feeNote: `Pass agent_owner_recipient=${agent.payoutWallet} in CreateParams to earn the agent-owner fee on this market.`,
+          preview: { positionUsdc: Number(body.positionUsdc ?? body.stakeUsdc ?? 0) },
+        };
   }
-
-  await saveIdempotentResponse(agent.agentId, action, request.idempotencyKey, {
-    status: 200,
-    body: result,
-  });
   await audit(request, "accepted");
+  await saveIdempotentResponse(agent.agentId, action, request.idempotencyKey, result);
   return json(result);
 }
 

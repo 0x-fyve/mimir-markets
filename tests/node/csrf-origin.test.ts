@@ -34,7 +34,7 @@ test("negative: mutating request fails if origin is invalid or cross-origin", ()
   });
   assert.equal(result.allowed, false);
   assert.equal(result.error?.status, 403);
-  assert.match(result.error?.body.error ?? "", /cross-origin mutations are not allowed/);
+  assert.match(result.error?.body.error.message ?? "", /cross-origin mutations are not allowed/);
 });
 
 test("boundary: public read requests do not require origin validation even from browser", () => {
