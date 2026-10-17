@@ -1,11 +1,11 @@
 #![cfg(test)]
-//! `batch_get_claims` — read multiple claims in a single call.
+//! `get_claims_batch` — read multiple claims in a single call.
 //!
 //! Coverage:
 //!   positive     – single id, multiple ids, all present, sparse present/absent
 //!   negative     – all-missing ids, batch too large, empty input
-//!   boundary     – exactly MAX_BATCH_CLAIMS ids (allowed),
-//!                  MAX_BATCH_CLAIMS + 1 (rejected), single id, two ids
+//!   boundary     – exactly MAX_BATCH_SIZE ids (allowed),
+//!                  MAX_BATCH_SIZE + 1 (rejected), single id, two ids
 //!   positional   – result order matches input order, including duplicates
 //!   conservation – no money movement, escrow balance unchanged
 //!   state        – resolved, cancelled, and open claims all returned correctly
@@ -17,7 +17,7 @@ use soroban_sdk::testutils::Ledger;
 use soroban_sdk::Vec;
 
 use crate::test_common::{Fixture, USDC};
-use crate::types::{ClaimState, WinnerSide, MAX_BATCH_CLAIMS};
+use crate::types::{ClaimState, WinnerSide, MAX_BATCH_SIZE};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ fn single_existing_id_returns_some() {
     let f = Fixture::new(0, 0);
     let id = open_claim(&f);
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id]));
     assert_eq!(result.len(), 1);
     assert!(result.get(0).unwrap().is_some(), "existing claim should be Some");
 }
@@ -55,7 +55,7 @@ fn multiple_existing_ids_all_return_some() {
     let id1 = open_claim(&f);
     let id2 = open_claim(&f);
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id0, id1, id2])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id0, id1, id2]));
     assert_eq!(result.len(), 3);
     for i in 0..3u32 {
         assert!(result.get(i).unwrap().is_some(), "slot {i} should be Some");
@@ -71,8 +71,7 @@ fn mix_of_existing_and_missing_ids_returns_correct_somes_and_nones() {
 
     let result = f
         .client()
-        .batch_get_claims(&ids(&f, &[id0, 999, id2, 1000]))
-        .unwrap();
+        .get_claims_batch(&ids(&f, &[id0, 999, id2, 1000]));
 
     assert_eq!(result.len(), 4);
     assert!(result.get(0).unwrap().is_some(), "slot 0 (existing) should be Some");
@@ -87,7 +86,7 @@ fn mix_of_existing_and_missing_ids_returns_correct_somes_and_nones() {
 fn all_missing_ids_return_all_nones() {
     let f = Fixture::new(0, 0);
 
-    let result = f.client().batch_get_claims(&ids(&f, &[100, 200, 300])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[100, 200, 300]));
     assert_eq!(result.len(), 3);
     for i in 0..3u32 {
         assert!(result.get(i).unwrap().is_none(), "slot {i} should be None for missing id");
@@ -100,15 +99,15 @@ fn batch_too_large_returns_claim_batch_too_large_error() {
 
     let f = Fixture::new(0, 0);
 
-    // Build a slice of MAX_BATCH_CLAIMS + 1 (non-existent) ids.
+    // Build a slice of MAX_BATCH_SIZE + 1 (non-existent) ids.
     let mut oversized: Vec<u64> = Vec::new(&f.env);
-    for i in 0..=(MAX_BATCH_CLAIMS as u64) {
+    for i in 0..=(MAX_BATCH_SIZE as u64) {
         oversized.push_back(i + 1_000_000);
     }
-    assert_eq!(oversized.len(), MAX_BATCH_CLAIMS + 1);
+    assert_eq!(oversized.len(), MAX_BATCH_SIZE + 1);
 
-    let err = f.client().try_batch_get_claims(&oversized).unwrap_err().unwrap();
-    assert_eq!(err, Error::ClaimBatchTooLarge);
+    let err = f.client().try_get_claims_batch(&oversized).unwrap_err().unwrap();
+    assert_eq!(err, Error::BatchTooLarge);
 }
 
 // ── boundary ─────────────────────────────────────────────────────────────────
@@ -118,7 +117,7 @@ fn empty_input_returns_empty_result() {
     let f = Fixture::new(0, 0);
 
     let empty: Vec<u64> = Vec::new(&f.env);
-    let result = f.client().batch_get_claims(&empty).unwrap();
+    let result = f.client().get_claims_batch(&empty);
     assert_eq!(result.len(), 0, "empty input must produce empty output");
 }
 
@@ -128,15 +127,15 @@ fn exactly_max_batch_claims_ids_is_accepted() {
 
     // Use non-existent ids — we only need to confirm the call succeeds.
     let mut max_ids: Vec<u64> = Vec::new(&f.env);
-    for i in 0..(MAX_BATCH_CLAIMS as u64) {
+    for i in 0..(MAX_BATCH_SIZE as u64) {
         max_ids.push_back(i + 1_000_000);
     }
-    assert_eq!(max_ids.len(), MAX_BATCH_CLAIMS);
+    assert_eq!(max_ids.len(), MAX_BATCH_SIZE);
 
     // Should succeed (return all Nones for non-existent ids).
-    let result = f.client().batch_get_claims(&max_ids).unwrap();
-    assert_eq!(result.len(), MAX_BATCH_CLAIMS);
-    for i in 0..MAX_BATCH_CLAIMS {
+    let result = f.client().get_claims_batch(&max_ids);
+    assert_eq!(result.len(), MAX_BATCH_SIZE);
+    for i in 0..MAX_BATCH_SIZE {
         assert!(result.get(i).unwrap().is_none());
     }
 }
@@ -147,18 +146,18 @@ fn one_over_max_batch_claims_is_rejected() {
 
     let f = Fixture::new(0, 0);
     let mut oversized: Vec<u64> = Vec::new(&f.env);
-    for i in 0..=(MAX_BATCH_CLAIMS as u64) {
+    for i in 0..=(MAX_BATCH_SIZE as u64) {
         oversized.push_back(i + 2_000_000);
     }
-    let err = f.client().try_batch_get_claims(&oversized).unwrap_err().unwrap();
-    assert_eq!(err, Error::ClaimBatchTooLarge);
+    let err = f.client().try_get_claims_batch(&oversized).unwrap_err().unwrap();
+    assert_eq!(err, Error::BatchTooLarge);
 }
 
 #[test]
 fn single_id_boundary_existing() {
     let f = Fixture::new(0, 0);
     let id = open_claim(&f);
-    let result = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id]));
     assert_eq!(result.len(), 1);
     assert!(result.get(0).unwrap().is_some());
 }
@@ -166,7 +165,7 @@ fn single_id_boundary_existing() {
 #[test]
 fn single_id_boundary_missing() {
     let f = Fixture::new(0, 0);
-    let result = f.client().batch_get_claims(&ids(&f, &[9_999])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[9_999]));
     assert_eq!(result.len(), 1);
     assert!(result.get(0).unwrap().is_none());
 }
@@ -175,7 +174,7 @@ fn single_id_boundary_missing() {
 fn two_ids_boundary() {
     let f = Fixture::new(0, 0);
     let id = open_claim(&f);
-    let result = f.client().batch_get_claims(&ids(&f, &[id, 9_999])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id, 9_999]));
     assert_eq!(result.len(), 2);
     assert!(result.get(0).unwrap().is_some());
     assert!(result.get(1).unwrap().is_none());
@@ -191,7 +190,7 @@ fn result_order_matches_input_order() {
     let id2 = open_claim(&f);
 
     // Request in reverse order; result must also be in that order.
-    let result = f.client().batch_get_claims(&ids(&f, &[id2, id1, id0])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id2, id1, id0]));
     assert_eq!(result.len(), 3);
 
     let c0 = result.get(0).unwrap().unwrap();
@@ -214,7 +213,7 @@ fn duplicate_ids_each_return_some_independently() {
     let id = open_claim(&f);
 
     // Request the same id twice; both slots should be Some.
-    let result = f.client().batch_get_claims(&ids(&f, &[id, id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id, id]));
     assert_eq!(result.len(), 2);
     assert!(result.get(0).unwrap().is_some(), "first occurrence should be Some");
     assert!(result.get(1).unwrap().is_some(), "second occurrence should be Some");
@@ -230,11 +229,11 @@ fn batch_read_does_not_change_escrow_balance() {
 
     let before = f.escrow_balance();
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id, 9_999])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id, 9_999]));
     assert_eq!(result.len(), 2);
 
     let after = f.escrow_balance();
-    assert_eq!(before, after, "batch_get_claims must not move any funds");
+    assert_eq!(before, after, "get_claims_batch must not move any funds");
 }
 
 // ── state machine: all ClaimState variants ────────────────────────────────────
@@ -244,7 +243,7 @@ fn open_claim_is_returned_correctly() {
     let f = Fixture::new(0, 0);
     let id = open_claim(&f);
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id]));
     let claim = result.get(0).unwrap().unwrap();
     assert_eq!(claim.state, ClaimState::Open);
 }
@@ -257,7 +256,7 @@ fn active_claim_is_returned_correctly() {
     let challenger = f.user(10 * USDC);
     f.client().challenge_claim(&challenger, &id, &(2 * USDC), &None);
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id]));
     let claim = result.get(0).unwrap().unwrap();
     assert_eq!(claim.state, ClaimState::Active);
 }
@@ -280,7 +279,7 @@ fn resolved_claim_is_returned_correctly() {
         &f.zero_hash(),
     );
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id]));
     let claim = result.get(0).unwrap().unwrap();
     assert_eq!(claim.state, ClaimState::Resolved);
     assert_eq!(claim.winner_side, WinnerSide::Creator);
@@ -296,7 +295,7 @@ fn cancelled_claim_is_returned_correctly() {
     f.env.ledger().with_mut(|li| li.timestamp += 3_700);
     f.client().cancel_claim(&id);
 
-    let result = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let result = f.client().get_claims_batch(&ids(&f, &[id]));
     let claim = result.get(0).unwrap().unwrap();
     assert_eq!(claim.state, ClaimState::Cancelled);
 }
@@ -310,7 +309,7 @@ fn batch_result_matches_single_get_claim_on_every_field() {
     let id = f.client().create_claim(&creator, &f.params(10 * USDC));
 
     let single = f.client().get_claim(&id);
-    let batch = f.client().batch_get_claims(&ids(&f, &[id])).unwrap();
+    let batch = f.client().get_claims_batch(&ids(&f, &[id]));
     let from_batch = batch.get(0).unwrap().unwrap();
 
     // All scalar and structural fields must be identical.
@@ -347,8 +346,7 @@ fn batch_with_gaps_each_present_slot_matches_single_get_claim() {
     // Leave a gap with a missing id in between.
     let batch = f
         .client()
-        .batch_get_claims(&ids(&f, &[id0, 999_999, id1]))
-        .unwrap();
+        .get_claims_batch(&ids(&f, &[id0, 999_999, id1]));
 
     let s0 = f.client().get_claim(&id0);
     let s1 = f.client().get_claim(&id1);

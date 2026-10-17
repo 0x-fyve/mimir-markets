@@ -43,6 +43,14 @@ pub const ORACLE_TIMELOCK_SECONDS: u64 = 172_800; // 2 days
 
 // ── Storage shapes ───────────────────────────────────────────────────────────
 
+/// A queued oracle rotation, executable once `executable_at` has passed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingOracle {
+    pub next: Address,
+    pub executable_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Market {
@@ -113,4 +121,11 @@ pub enum Error {
     /// (frozen or deauthorized trustline). The amount is parked, not lost:
     /// `claim` succeeds and holds it, `claim_parked_payout` retries it.
     PayoutParked = 29,
+    /// `cancel_market` was called on a market that is already resolved or
+    /// cancelled.
+    AlreadyResolved = 30,
+    /// `cancel_oracle` / `execute_oracle` found no queued oracle rotation.
+    NothingQueued = 31,
+    /// `execute_oracle` was called before the rotation's timelock elapsed.
+    Timelocked = 32,
 }

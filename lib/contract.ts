@@ -39,6 +39,7 @@
 import { Buffer } from "buffer";
 
 import { MimirMarket, MimirSquad } from "@/sdk/contracts";
+import { inviteKeyMatches } from "@/lib/invite-key";
 
 import {
   STELLAR_READ_CONCURRENCY,
@@ -1937,12 +1938,40 @@ export async function getClaimSummaries(
   return results.filter(Boolean) as ClaimData[];
 }
 
-/** Returns a single claim, optionally checking invite key. */
+/**
+ * Returns a claim for an invite-key reader.
+ *
+ * A public claim is returned as is. A private claim is returned only when the
+ * supplied key hashes to the `invite_key_hash` stored on chain; any other key,
+ * no key, or a private claim without a stored hash yields `null` (fail closed),
+ * which the route reports as a plain 404.
+ */
 export async function getClaimWithAccess(
   claimId: number,
-  _inviteKey?: string,
+  inviteKey?: string,
+  deps: {
+    readClaim?: (id: number) => Promise<ClaimData | null>;
+    readInviteHash?: (id: number) => Promise<Uint8Array | null>;
+  } = {},
 ): Promise<ClaimData | null> {
-  return readClaimRaw(claimId);
+  const claim = await (deps.readClaim ?? readClaimRaw)(claimId);
+  if (!claim) return null;
+  if (!claim.is_private) return claim;
+  if (!inviteKey) return null;
+  const expected = await (deps.readInviteHash ?? readInviteKeyHash)(claimId);
+  return inviteKeyMatches(inviteKey, expected) ? claim : null;
+}
+
+/** The claim's on-chain `invite_key_hash`, or null when unset or unreadable. */
+async function readInviteKeyHash(claimId: number): Promise<Uint8Array | null> {
+  try {
+    const tx = await marketReader().get_claim_market_config({ claim_id: BigInt(claimId) });
+    const config = unwrapOrNull<MimirMarket.MarketConfig>(tx.result);
+    const hash = config?.invite_key_hash;
+    return hash ? new Uint8Array(hash) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Returns open/active public claims as ClaimData. */

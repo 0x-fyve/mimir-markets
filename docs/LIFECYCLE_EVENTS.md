@@ -156,6 +156,37 @@ Emitted when liquidity is withdrawn from a pool market before resolution.
 
 **Usage:** Distinguish between pre-deadline liquidity exits (this event) and post-resolution claims (which use the `Claimed` event).
 
+#### MarketCancelled
+Emitted when the captain cancels a market before its deadline.
+
+**Fields:**
+- `market_id` (topic): Market ID
+- `captain` (topic): Captain who cancelled
+- `pool_a`: Side A pool at cancellation (kept for the audit trail)
+- `pool_b`: Side B pool at cancellation
+
+**Emitted by:**
+- `cancel_market`: only before the deadline; seeds `remaining_escrow = pool_a + pool_b` so every depositor can pull a full refund through `claim`
+
+#### PayoutParked
+Emitted when a payout cannot be delivered (frozen or deauthorized trustline) and is parked for a later `claim_parked_payout`.
+
+**Fields:**
+- `market_id` (topic): Market ID
+- `side` (topic): Side claimed
+- `participant` (topic): Winner whose payout was parked
+- `amount`: Net amount parked
+
+#### SquadFull
+Emitted on the deposit that fills the squad to `MAX_SQUAD_MEMBERS`.
+
+**Fields:**
+- `market_id` (topic): Market ID
+- `total_members`: Members across both sides
+
+#### OracleQueued / OracleCancelled / OracleChanged
+Oracle rotation timelock: `queue_oracle` (topic `next`, `executable_at`), `cancel_oracle` (`cancelled`), `execute_oracle` (topic `next`, `previous`).
+
 ### Existing Events Enhanced
 
 The following existing events work with lifecycle events:

@@ -63,8 +63,11 @@ const result = spawnSync(
     "--config", ".c8rc",
     // The wrapped command
     process.execPath,
-    "--require", "tests/node/helpers/stubs.cjs",
-    "--require", "node_modules/tsx/dist/cjs/index.cjs",
+    // Same loader as scripts/run-node-tests.mjs. The suite runs against the real
+    // modules: stubbing @stellar/stellar-sdk globally broke every test that signs
+    // or verifies, and the money-path modules no longer need it (paid-pass logic
+    // is server-only-free; paid-revenue falls back to memory without a DB).
+    "--import", "tsx",
     "--test",
     ...files,
   ],

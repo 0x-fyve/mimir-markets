@@ -63,9 +63,6 @@ pub fn resolve_claim_versioned(
     let winner_side = verdict.decode()?;
 
     let mut claim = storage::get_claim(env, claim_id)?;
-    // Decode first: an unknown version must never be written, and `None` is not
-    // a settled verdict. Both refusals leave the claim untouched.
-    let winner_side = verdict.decode()?;
     if claim.state == ClaimState::Resolved {
         // Idempotent replay: same decoded verdict and inputs is a no-op.
         if verdict.decode().ok() == Some(claim.winner_side)
@@ -93,10 +90,7 @@ pub fn resolve_claim_versioned(
             .ok_or(Error::Overflow)?,
     }
     .publish(env);
-    
-    // Decode first: an unknown version must never be written, and `None` is not
-    // a settled verdict. Both refusals leave the claim untouched.
-    let winner_side = verdict.decode()?;
+
     if confidence > 100 {
         return Err(Error::InvalidConfidence);
     }

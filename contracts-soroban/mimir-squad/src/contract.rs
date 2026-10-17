@@ -62,9 +62,9 @@ impl MimirSquad {
         pool::resolve(&env, market_id, result)
     }
 
-    /// Captain-initiated market cancellation. Sets the market as resolved with
-    /// result=RESULT_CANCELLED, allowing all depositors to claim full refunds
-    /// via the claim() function. No fees are charged on cancellation.
+    /// Captain-initiated market cancellation, only before the deadline. Sets the
+    /// market as resolved with result=RESULT_CANCELLED, allowing all depositors
+    /// to claim full refunds via claim(). No fees are charged on cancellation.
     pub fn cancel_market(env: Env, market_id: u64) -> Result<(), Error> {
         pool::cancel_market(&env, market_id)
     }
@@ -135,6 +135,21 @@ impl MimirSquad {
 
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         storage::oracle(&env)
+    }
+
+    /// Queue an oracle rotation; the current oracle must authorize.
+    pub fn queue_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        pool::queue_oracle(&env, new_oracle)
+    }
+
+    /// Drop a queued oracle rotation; the current oracle must authorize.
+    pub fn cancel_oracle(env: Env) -> Result<(), Error> {
+        pool::cancel_oracle(&env)
+    }
+
+    /// Apply a queued oracle rotation once its timelock has elapsed.
+    pub fn execute_oracle(env: Env) -> Result<(), Error> {
+        pool::execute_oracle(&env)
     }
 
     pub fn get_pending_oracle(env: Env) -> Option<PendingOracle> {

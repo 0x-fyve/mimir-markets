@@ -1859,7 +1859,8 @@ export async function saveCopyPermission(permission: CopyPermission, at = Date.n
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(permission_id) DO UPDATE SET policy_json=excluded.policy_json,
       status=excluded.status, updated_at=excluded.updated_at,
-      revoked_at=CASE WHEN excluded.status='revoked' THEN excluded.updated_at ELSE copy_permissions.revoked_at END`,
+      revoked_at=CASE WHEN excluded.status='revoked' THEN excluded.updated_at ELSE copy_permissions.revoked_at END
+      WHERE copy_permissions.status <> 'revoked'`,
     args: [permission.permissionId, permission.ownerWallet, permission.executionAgentId,
       permission.signalAgentId, JSON.stringify(permission, (_, v) => typeof v === "bigint" ? v.toString() : v),
       permission.signedPolicyHash, permission.status, at, at],

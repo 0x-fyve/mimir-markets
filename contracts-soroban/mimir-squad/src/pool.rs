@@ -6,8 +6,9 @@ use crate::escrow;
 use crate::events;
 use crate::storage;
 use crate::types::{
-    ClaimResult, Error, Market, BPS_DIVISOR, MAX_DURATION, MAX_FEE_BPS, MAX_PARTICIPANTS_PER_SIDE,
-    MAX_QUESTION_BYTES, MAX_SQUAD_MEMBERS, MIN_DURATION, RESULT_CANCELLED, SIDE_A, SIDE_B,
+    ClaimResult, Error, Market, PendingOracle, BPS_DIVISOR, MAX_DURATION, MAX_FEE_BPS,
+    MAX_PARTICIPANTS_PER_SIDE, MAX_QUESTION_BYTES, MAX_SQUAD_MEMBERS, MIN_DURATION,
+    ORACLE_TIMELOCK_SECONDS, RESULT_CANCELLED, SIDE_A, SIDE_B,
 };
 
 /// The fee on one winning claim: `floor(profit * fee_bps / BPS_DIVISOR)`.
@@ -233,6 +234,20 @@ pub fn deposit(
         market.pool_b
     };
 
+    if previous == 0 {
+        let total_now = market
+            .participants_a
+            .checked_add(market.participants_b)
+            .ok_or(Error::Overflow)?;
+        if total_now == MAX_SQUAD_MEMBERS {
+            events::SquadFull {
+                market_id,
+                total_members: total_now,
+            }
+            .publish(env);
+        }
+    }
+
     events::LiquidityAdded {
         market_id,
         side,
@@ -439,35 +454,31 @@ pub fn cancel_market(env: &Env, market_id: u64) -> Result<(), Error> {
     if market.resolved {
         return Err(Error::AlreadyResolved);
     }
+    // Cancellation is a pre-deadline escape hatch only. Once the deadline has
+    // passed the outcome may be known, and a captain who is also a depositor
+    // must not be able to void a market they are about to lose; settlement then
+    // belongs to `resolve` / `transition_deadline`.
+    if env.ledger().timestamp() >= market.deadline {
+        return Err(Error::MarketClosed);
+    }
 
-    // Snapshot the pools before cancellation (for event audit trail).
-    let pool_a_snapshot = market.pool_a;
-    let pool_b_snapshot = market.pool_b;
-
-    // Mark the market as resolved and set result to cancelled.
+    // Every deposit is refunded in full through `claim`, so the escrow owed to
+    // depositors is exactly both pools. Without this, refunds would draw down
+    // a zero balance and trip the conservation check, locking every deposit.
     market.resolved = true;
     market.result = RESULT_CANCELLED;
+    market.remaining_escrow = market
+        .pool_a
+        .checked_add(market.pool_b)
+        .ok_or(Error::Overflow)?;
+    assert_market_conservation(&market)?;
     storage::set_market(env, market_id, &market);
-
-    // Refund all participants on both sides their full deposits.
-    let usdc = storage::usdc(env)?;
-
-    // Process SIDE_A refunds.
-    // Note: We cannot iterate the participants directly since we don't maintain
-    // a roster list. Instead, we rely on the caller calling claim_cancelled or
-    // a side-channel to discover refundable deposits. The alternative (storing
-    // a roster) would require O(n) storage mutation on each deposit/withdrawal.
-    //
-    // ACTUAL IMPLEMENTATION: We need a way to iterate participants. Looking at
-    // the current design, there's no stored roster. The test suite will show us
-    // if we need one. For now, publish the event and let participants claim.
-    // The claim() function will handle RESULT_CANCELLED by refunding full principal.
 
     events::MarketCancelled {
         market_id,
         captain: market.captain.clone(),
-        pool_a: pool_a_snapshot,
-        pool_b: pool_b_snapshot,
+        pool_a: market.pool_a,
+        pool_b: market.pool_b,
     }
     .publish(env);
     Ok(())
