@@ -6,8 +6,9 @@ use crate::escrow;
 use crate::events;
 use crate::storage;
 use crate::types::{
-    ClaimResult, Error, Market, BPS_DIVISOR, MAX_DURATION, MAX_FEE_BPS, MAX_PARTICIPANTS_PER_SIDE,
-    MAX_QUESTION_BYTES, MAX_SQUAD_MEMBERS, MIN_DURATION, RESULT_CANCELLED, SIDE_A, SIDE_B,
+    ClaimResult, Error, Market, PendingOracle, BPS_DIVISOR, MAX_DURATION, MAX_FEE_BPS,
+    MAX_PARTICIPANTS_PER_SIDE, MAX_QUESTION_BYTES, MAX_SQUAD_MEMBERS, MIN_DURATION,
+    ORACLE_TIMELOCK_SECONDS, RESULT_CANCELLED, SIDE_A, SIDE_B,
 };
 
 /// The fee on one winning claim: `floor(profit * fee_bps / BPS_DIVISOR)`.
@@ -62,6 +63,39 @@ fn assert_market_conservation(market: &Market) -> Result<(), Error> {
     Ok(())
 }
 
+/// The gross payout for one winning claim, before fees.
+///
+/// Every winner but the final one receives their pro-rata share,
+/// `floor((pool_a + pool_b) * principal / winner_pool)`, which truncates. The
+/// last winner to claim receives whatever `remaining_escrow` is left, so the
+/// pool-share truncation dust is distributed rather than stranded in escrow.
+///
+/// `claim` and `preview_claim` both call this one function, so the dust branch
+/// cannot be computed two different ways: a preview of the final winner cannot
+/// round differently from the payout it is previewing.
+fn winner_gross(market: &Market, principal: i128) -> Result<i128, Error> {
+    let winner_pool = if market.result == SIDE_A {
+        market.pool_a
+    } else {
+        market.pool_b
+    };
+    let winner_count = if market.result == SIDE_A {
+        market.participants_a
+    } else {
+        market.participants_b
+    };
+
+    // `winner_claims` counts winners that have already pulled. This call is the
+    // next one, so it closes the escrow when it is the final winner.
+    if market.winner_claims + 1 == winner_count {
+        return Ok(market.remaining_escrow);
+    }
+
+    (market.pool_a + market.pool_b)
+        .checked_mul(principal)
+        .map(|p| p / winner_pool)
+        .ok_or(Error::Overflow)
+}
 
 pub fn initialize(
     env: &Env,
@@ -194,9 +228,12 @@ pub fn deposit(
     }
     storage::set_market(env, market_id, &market);
 
-    // Emit a SquadFull event when this deposit fills the very last available
-    // slot so that off-chain indexers can react without polling.  We emit this
-    // *after* the state write so the stored counts are already correct.
+    let new_pool_total = if side == SIDE_A {
+        market.pool_a
+    } else {
+        market.pool_b
+    };
+
     if previous == 0 {
         let total_now = market
             .participants_a
@@ -210,6 +247,15 @@ pub fn deposit(
             .publish(env);
         }
     }
+
+    events::LiquidityAdded {
+        market_id,
+        side,
+        amount,
+        new_pool_total,
+        shares_issued: amount,
+    }
+    .publish(env);
 
     events::Deposited {
         market_id,
@@ -233,6 +279,9 @@ pub fn withdraw_before_deadline(
     require_side(side)?;
 
     let mut market = storage::get_market(env, market_id)?;
+    // Pause controls must never block withdrawals: this path deliberately does
+    // not consult any pause flag. Depositors can always exit before the
+    // deadline, even while the market is paused for new deposits.
     if market.resolved || env.ledger().timestamp() >= market.deadline {
         return Err(Error::Locked);
     }
@@ -263,6 +312,21 @@ pub fn withdraw_before_deadline(
     let usdc = storage::usdc(env)?;
     escrow::push(env, &usdc, &participant, amount);
 
+    let new_pool_total = if side == SIDE_A {
+        market.pool_a
+    } else {
+        market.pool_b
+    };
+
+    events::LiquidityRemoved {
+        market_id,
+        side,
+        amount,
+        new_pool_total,
+        shares_burned: amount,
+    }
+    .publish(env);
+
     events::Withdrawn {
         market_id,
         side,
@@ -286,6 +350,14 @@ pub fn transition_deadline(env: &Env, market_id: u64) -> Result<(), Error> {
         return Err(Error::Locked);
     }
 
+    events::MarketDeadlineReached {
+        market_id,
+        deadline: market.deadline,
+        pool_a_total: market.pool_a,
+        pool_b_total: market.pool_b,
+    }
+    .publish(env);
+
     market.resolved = true;
     market.result = RESULT_CANCELLED;
     market.remaining_escrow = market
@@ -293,6 +365,15 @@ pub fn transition_deadline(env: &Env, market_id: u64) -> Result<(), Error> {
         .checked_add(market.pool_b)
         .ok_or(Error::Overflow)?;
     assert_market_conservation(&market)?;
+    
+    events::MarketStateTransitioned {
+        market_id,
+        from_state: 0, // Active
+        to_state: 2,   // Resolved
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+    
     storage::set_market(env, market_id, &market);
 
     events::Resolved {
@@ -333,6 +414,14 @@ pub fn resolve(env: &Env, market_id: u64, result: u32) -> Result<(), Error> {
         }
     }
 
+    events::MarketDeadlineReached {
+        market_id,
+        deadline: market.deadline,
+        pool_a_total: market.pool_a,
+        pool_b_total: market.pool_b,
+    }
+    .publish(env);
+
     market.resolved = true;
     market.result = result;
     market.remaining_escrow = market
@@ -340,11 +429,57 @@ pub fn resolve(env: &Env, market_id: u64, result: u32) -> Result<(), Error> {
         .checked_add(market.pool_b)
         .ok_or(Error::Overflow)?;
     assert_market_conservation(&market)?;
+    
+    events::MarketStateTransitioned {
+        market_id,
+        from_state: 0, // Active
+        to_state: 2,   // Resolved
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+    
     storage::set_market(env, market_id, &market);
 
     events::Resolved {
         market_id,
         result,
+        pool_a: market.pool_a,
+        pool_b: market.pool_b,
+    }
+    .publish(env);
+    Ok(())
+}
+
+pub fn cancel_market(env: &Env, market_id: u64) -> Result<(), Error> {
+    let mut market = storage::get_market(env, market_id)?;
+    market.captain.require_auth();
+
+    if market.resolved {
+        return Err(Error::AlreadyResolved);
+    }
+    // Cancellation is a pre-deadline escape hatch only. Once the deadline has
+    // passed the outcome may be known, and a captain who is also a depositor
+    // must not be able to void a market they are about to lose; settlement then
+    // belongs to `resolve` / `transition_deadline`.
+    if env.ledger().timestamp() >= market.deadline {
+        return Err(Error::MarketClosed);
+    }
+
+    // Every deposit is refunded in full through `claim`, so the escrow owed to
+    // depositors is exactly both pools. Without this, refunds would draw down
+    // a zero balance and trip the conservation check, locking every deposit.
+    market.resolved = true;
+    market.result = RESULT_CANCELLED;
+    market.remaining_escrow = market
+        .pool_a
+        .checked_add(market.pool_b)
+        .ok_or(Error::Overflow)?;
+    assert_market_conservation(&market)?;
+    storage::set_market(env, market_id, &market);
+
+    events::MarketCancelled {
+        market_id,
+        captain: market.captain.clone(),
         pool_a: market.pool_a,
         pool_b: market.pool_b,
     }
@@ -362,6 +497,9 @@ pub fn claim(
     require_side(side)?;
 
     let mut market = storage::get_market(env, market_id)?;
+    // Pause controls must never block withdrawals: settlement payouts are
+    // always claimable once resolved, regardless of any pause flag. Only new
+    // deposits are gated by pause.
     if !market.resolved {
         return Err(Error::NotClaimable);
     }
@@ -383,29 +521,11 @@ pub fn claim(
     let mut fee = 0i128;
 
     if market.result != RESULT_CANCELLED {
-        let winner_pool = if market.result == SIDE_A {
-            market.pool_a
-        } else {
-            market.pool_b
-        };
-        let winner_count = if market.result == SIDE_A {
-            market.participants_a
-        } else {
-            market.participants_b
-        };
-
+        // The last winner to claim absorbs whatever is left, so truncation dust
+        // cannot be stranded in escrow. Computed before the counter moves so the
+        // same `winner_gross` a preview used a moment earlier applies here.
+        gross = winner_gross(&market, principal)?;
         market.winner_claims += 1;
-        gross = if market.winner_claims == winner_count {
-            // The last winner to claim absorbs whatever is left, so truncation
-            // dust cannot be stranded in escrow.
-            market.remaining_escrow
-        } else {
-            (market.pool_a + market.pool_b)
-                .checked_mul(principal)
-                .map(|p| p / winner_pool)
-                .ok_or(Error::Overflow)?
-        };
-
         fee = profit_fee(principal, gross, market.fee_bps)?;
     }
 
@@ -423,7 +543,30 @@ pub fn claim(
     storage::set_accrued_fees(env, storage::accrued_fees(env) + fee);
 
     let usdc = storage::usdc(env)?;
-    escrow::push(env, &usdc, &participant, net);
+    if !escrow::try_push(env, &usdc, &participant, net) {
+        // The winner's trustline is frozen: the token traps, and under a plain
+        // `push` that reverts the whole claim, so the position could not be
+        // settled while the trustline stays frozen. Everything above is already
+        // applied and is exactly what a later retry needs — the claim stays
+        // marked (no double claim) and the escrow keeps the funds — so only the
+        // interaction is deferred: the amount is parked against the winner and
+        // `claim_parked_payout` moves it once the trustline can receive.
+        storage::set_payout(
+            env,
+            market_id,
+            side,
+            &participant,
+            storage::payout_of(env, market_id, side, &participant) + net,
+        );
+        events::PayoutParked {
+            market_id,
+            side,
+            participant: participant.clone(),
+            amount: net,
+        }
+        .publish(env);
+        return Ok(net);
+    }
 
     events::Claimed {
         market_id,
@@ -436,18 +579,63 @@ pub fn claim(
     Ok(net)
 }
 
+/// Retry a payout that [`claim`] parked, once the winner's trustline can
+/// receive again.
+///
+/// The parked amount is cleared before the transfer so a re-entrant call cannot
+/// double-pay, and restored if the token traps again: a frozen trustline leaves
+/// the balance parked rather than dropped, and the caller is told with
+/// [`Error::PayoutParked`]. Returns `0` when nothing is parked, so a retry loop
+/// is idempotent.
+pub fn claim_parked_payout(
+    env: &Env,
+    participant: Address,
+    market_id: u64,
+    side: u32,
+) -> Result<i128, Error> {
+    participant.require_auth();
+    require_side(side)?;
+
+    // Pause controls must never block withdrawals: retrying a parked payout is
+    // a withdrawal path and is never gated by pause.
+    let amount = storage::payout_of(env, market_id, side, &participant);
+    if amount <= 0 {
+        return Ok(0);
+    }
+    storage::set_payout(env, market_id, side, &participant, 0); // effects before interaction
+
+    let usdc = storage::usdc(env)?;
+    if !escrow::try_push(env, &usdc, &participant, amount) {
+        storage::set_payout(env, market_id, side, &participant, amount);
+        return Err(Error::PayoutParked);
+    }
+    Ok(amount)
+}
+
 pub fn claim_fees(env: &Env) -> Result<i128, Error> {
     let recipient = storage::fee_recipient(env)?;
     recipient.require_auth();
 
+    // Pause controls must never block withdrawals: accrued fees are owed to the
+    // recipient and remain claimable while paused.
     let amount = storage::accrued_fees(env);
     if amount <= 0 {
         return Ok(0);
     }
+
     storage::set_accrued_fees(env, 0); // effects before interaction
 
     let usdc = storage::usdc(env)?;
-    escrow::push(env, &usdc, &recipient, amount);
+    if !escrow::try_push(env, &usdc, &recipient, amount) {
+        // A deauthorized fee recipient cannot be credited. The effect is put
+        // back and the call is rejected, so the fees stay in escrow and stay
+        // claimable: a frozen recipient cannot lose them by trying to claim
+        // them, and nothing else in the pool is held up because fees are only
+        // ever pulled here. The recipient retries once the balance is
+        // authorized again.
+        storage::set_accrued_fees(env, amount);
+        return Err(Error::PayoutParked);
+    }
 
     events::FeesClaimed {
         recipient,
@@ -488,28 +676,74 @@ pub fn preview_claim(
         });
     }
 
-    let winner_pool = if market.result == SIDE_A {
-        market.pool_a
-    } else {
-        market.pool_b
-    };
-    let winner_count = if market.result == SIDE_A {
-        market.participants_a
-    } else {
-        market.participants_b
-    };
-    let gross = if market.winner_claims + 1 == winner_count {
-        market.remaining_escrow
-    } else {
-        (market.pool_a + market.pool_b)
-            .checked_mul(principal)
-            .map(|p| p / winner_pool)
-            .ok_or(Error::Overflow)?
-    };
+    // A settled position previews as nothing: `claim` is a no-op after the pull,
+    // so the preview must agree instead of promising a second payout.
+    if storage::has_claimed(env, market_id, side, participant) {
+        return Ok(ClaimResult {
+            gross: 0,
+            fee: 0,
+            net: 0,
+        });
+    }
+
+    let gross = winner_gross(&market, principal)?;
     let fee = profit_fee(principal, gross, market.fee_bps)?;
     Ok(ClaimResult {
         gross,
         fee,
         net: gross - fee,
     })
+}
+
+/// Queue an oracle rotation. The current oracle must authorize — there is no
+/// separate owner role on the squad pool. The change is delayed so depositors
+/// have notice before settlement authority moves.
+pub fn queue_oracle(env: &Env, new_oracle: Address) -> Result<(), Error> {
+    storage::oracle(env)?.require_auth();
+    let executable_at = env
+        .ledger()
+        .timestamp()
+        .checked_add(ORACLE_TIMELOCK_SECONDS)
+        .ok_or(Error::Overflow)?;
+
+    storage::set_pending_oracle(
+        env,
+        &PendingOracle {
+            next: new_oracle.clone(),
+            executable_at,
+        },
+    );
+    events::OracleQueued {
+        next: new_oracle,
+        executable_at,
+    }
+    .publish(env);
+    Ok(())
+}
+
+pub fn cancel_oracle(env: &Env) -> Result<(), Error> {
+    storage::oracle(env)?.require_auth();
+    if storage::pending_oracle(env).is_none() {
+        return Err(Error::NothingQueued);
+    }
+    storage::clear_pending_oracle(env);
+    events::OracleCancelled { cancelled: true }.publish(env);
+    Ok(())
+}
+
+/// Permissionless once the timelock has elapsed.
+pub fn execute_oracle(env: &Env) -> Result<(), Error> {
+    let queued = storage::pending_oracle(env).ok_or(Error::NothingQueued)?;
+    if env.ledger().timestamp() < queued.executable_at {
+        return Err(Error::Timelocked);
+    }
+    let previous = storage::oracle(env)?;
+    storage::set_oracle(env, &queued.next);
+    storage::clear_pending_oracle(env);
+    events::OracleChanged {
+        next: queued.next,
+        previous,
+    }
+    .publish(env);
+    Ok(())
 }

@@ -2,15 +2,18 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::types::{Error, Market};
+use crate::types::{Error, Market, PendingOracle};
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Init,
     Usdc,
+    /// Global pause flag. Pausing must never block withdrawals or claims.
+    Paused,
     Oracle,
     FeeRecipient,
+    PendingOracle,
     MarketCount,
     AccruedFees,
     Market(u64),
@@ -18,12 +21,31 @@ pub enum DataKey {
     Deposit(u64, u32, Address),
     /// (market, side, participant) -> already claimed.
     Claimed(u64, u32, Address),
+    /// (market, side, participant) -> payout settled in the ledger but not
+    /// delivered, because the token transfer trapped (frozen or deauthorized
+    /// trustline). Parked until `claim_parked_payout` can move it.
+    Payout(u64, u32, Address),
 }
 
 const BUMP_THRESHOLD: u32 = 120_960;
 const BUMP_EXTEND: u32 = 518_400;
 
 // ── Config ───────────────────────────────────────────────────────────────────
+
+/// Returns true when the contract is paused. Pausing only gates state-mutating
+/// entry points that create new exposure (deposits, market creation, oracle
+/// rotation); withdrawals, claims, and parked-payout delivery must remain
+/// available so users can always exit.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::Paused, &paused);
+}
 
 pub fn is_initialized(env: &Env) -> bool {
     env.storage().instance().has(&DataKey::Init)
@@ -58,6 +80,22 @@ pub fn set_config(env: &Env, usdc: &Address, oracle: &Address, fee_recipient: &A
     env.storage()
         .instance()
         .set(&DataKey::FeeRecipient, fee_recipient);
+}
+
+pub fn set_oracle(env: &Env, oracle: &Address) {
+    env.storage().instance().set(&DataKey::Oracle, oracle);
+}
+
+pub fn pending_oracle(env: &Env) -> Option<PendingOracle> {
+    env.storage().instance().get(&DataKey::PendingOracle)
+}
+
+pub fn set_pending_oracle(env: &Env, pending: &PendingOracle) {
+    env.storage().instance().set(&DataKey::PendingOracle, pending);
+}
+
+pub fn clear_pending_oracle(env: &Env) {
+    env.storage().instance().remove(&DataKey::PendingOracle);
 }
 
 // ── Counters ─────────────────────────────────────────────────────────────────
@@ -140,4 +178,35 @@ pub fn mark_claimed(env: &Env, id: u64, side: u32, who: &Address) {
     env.storage()
         .persistent()
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_EXTEND);
+}
+
+// ── Parked payouts ───────────────────────────────────────────────────────────
+
+/// Payout settled in the ledger but not delivered yet. Zero means nothing is
+/// parked, and writing zero removes the entry rather than storing a zero.
+pub fn payout_of(env: &Env, id: u64, side: u32, who: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Payout(id, side, who.clone()))
+        .unwrap_or(0)
+}
+
+pub fn set_payout(env: &Env, id: u64, side: u32, who: &Address, value: i128) {
+    let key = DataKey::Payout(id, side, who.clone());
+    if value == 0 {
+        env.storage().persistent().remove(&key);
+        return;
+    }
+    env.storage().persistent().set(&key, &value);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_EXTEND);
+}
+
+/// True when a participant has a parked payout awaiting delivery. Used by
+/// `claim_parked_payout` to keep the exit path reachable while paused.
+pub fn has_parked_payout(env: &Env, id: u64, side: u32, who: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .has(&DataKey::Payout(id, side, who.clone()))
 }

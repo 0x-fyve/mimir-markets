@@ -5,7 +5,10 @@
 
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
-use crate::types::{Challenger, Claim, Error, FeePolicy, PendingFeePolicy, Verdict};
+use crate::types::{
+    Challenger, ChallengerPage, Claim, Error, FeePolicy, PendingFeePolicy, PendingOracle,
+    RematchStatus, Verdict,
+};
 
 #[contracttype]
 #[derive(Clone)]
@@ -17,6 +20,8 @@ pub enum DataKey {
     Usdc,
     Policy,
     Pending,
+    /// Queued oracle rotation (separate from fee-policy Pending).
+    PendingOracle,
     ClaimCount,
     TotalResolved,
     FeesAccrued,
@@ -31,6 +36,12 @@ pub enum DataKey {
     Withdrawable(Address),
     /// Accrued, unclaimed fees. Always pulled, never pushed.
     Accrued(Address),
+    /// Global pause flag. When set, state-mutating entry points are blocked
+    /// EXCEPT withdrawals and other pull-payment paths, which must always
+    /// remain available so users can exit with their funds.
+    Paused,
+    /// Rematch parent link validation cache: (parent_id, child_id) -> RematchStatus
+    RematchParent(u64, u64),
 }
 
 /// Persistent entries are bumped to roughly 30 days of ledgers on touch so an
@@ -104,6 +115,33 @@ pub fn clear_pending_fee_policy(env: &Env) {
     env.storage().instance().remove(&DataKey::Pending);
 }
 
+pub fn pending_oracle(env: &Env) -> Option<PendingOracle> {
+    env.storage().instance().get(&DataKey::PendingOracle)
+}
+
+pub fn set_pending_oracle(env: &Env, pending: &PendingOracle) {
+    env.storage().instance().set(&DataKey::PendingOracle, pending);
+}
+
+pub fn clear_pending_oracle(env: &Env) {
+    env.storage().instance().remove(&DataKey::PendingOracle);
+}
+
+/// Whether the contract is currently paused.
+///
+/// Absent means "not paused" so pre-pause deployments and freshly
+/// initialised contracts behave as unpaused without an explicit write.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::Paused, &paused);
+}
+
 fn counter(env: &Env, key: DataKey) -> u64 {
     env.storage().instance().get(&key).unwrap_or(0)
 }
@@ -166,6 +204,27 @@ pub fn get_claim(env: &Env, id: u64) -> Result<Claim, Error> {
     Ok(claim)
 }
 
+/// Return `Some(claim)` if the entry exists, `None` if it does not.
+///
+/// Unlike [`get_claim`], a miss does NOT bump the TTL (there is nothing to
+/// extend) and does NOT return an error, so it is the right primitive for
+/// batch reads where a missing id is a normal, non-fatal answer.
+///
+/// A present entry still receives its usual TTL extension so an open market
+/// cannot expire while a batch is being constructed.
+pub fn get_claim_opt(env: &Env, id: u64) -> Option<Claim> {
+    let key = DataKey::Claim(id);
+    match env.storage().persistent().get::<_, Claim>(&key) {
+        Some(claim) => {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, BUMP_THRESHOLD, BUMP_EXTEND);
+            Some(claim)
+        }
+        None => None,
+    }
+}
+
 pub fn set_claim(env: &Env, id: u64, claim: &Claim) {
     let key = DataKey::Claim(id);
     env.storage().persistent().set(&key, claim);
@@ -194,22 +253,11 @@ pub fn challengers(env: &Env, id: u64) -> Vec<Challenger> {
 ///
 /// Never panics: if `offset` is beyond the end of the roster the returned
 /// `items` slice is empty and `total` carries the actual roster length.
-pub fn challengers_page(
-    env: &Env,
-    id: u64,
-    offset: u32,
-    limit: u32,
-) -> crate::types::ChallengerPage {
+pub fn challengers_page(env: &Env, id: u64, offset: u32, limit: u32) -> ChallengerPage {
     let list = challengers(env, id);
     let total = list.len();
-
-    // Clamp offset to [0, total] so arithmetic below is always valid.
     let start = offset.min(total);
-
-    // How many items remain from `start` to the end of the roster.
     let remaining = total - start;
-
-    // Effective limit: 0 means "everything remaining".
     let take = if limit == 0 {
         remaining
     } else {
@@ -221,7 +269,7 @@ pub fn challengers_page(
         items.push_back(list.get(i).unwrap());
     }
 
-    crate::types::ChallengerPage {
+    ChallengerPage {
         items,
         offset: start,
         total,
@@ -234,6 +282,15 @@ pub fn set_challengers(env: &Env, id: u64, list: &Vec<Challenger>) {
     env.storage()
         .persistent()
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_EXTEND);
+}
+
+/// True when the contract is paused. Callers on state-mutating paths should
+/// gate on this; withdrawal and pull-payment paths must NOT gate on it.
+pub fn require_not_paused(env: &Env) -> Result<(), Error> {
+    if is_paused(env) {
+        return Err(Error::Paused);
+    }
+    Ok(())
 }
 
 // ── Versioned verdicts ───────────────────────────────────────────────────────
@@ -305,4 +362,33 @@ pub fn add_accrued_fees(env: &Env, who: &Address, delta: i128) {
 
 pub fn clear_accrued_fees(env: &Env, who: &Address) {
     set_address_i128(env, DataKey::Accrued(who.clone()), 0);
+}
+
+// ── Rematch Parent Link Validation ───────────────────────────────────────────
+
+pub fn get_rematch_parent_status(
+    env: &Env,
+    parent_id: u64,
+    child_id: u64,
+) -> Option<RematchStatus> {
+    let key = DataKey::RematchParent(parent_id, child_id);
+    env.storage().persistent().get(&key)
+}
+
+pub fn set_rematch_parent_status(
+    env: &Env,
+    parent_id: u64,
+    child_id: u64,
+    status: &RematchStatus,
+) {
+    let key = DataKey::RematchParent(parent_id, child_id);
+    env.storage().persistent().set(&key, status);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_EXTEND);
+}
+
+pub fn clear_rematch_parent_status(env: &Env, parent_id: u64, child_id: u64) {
+    let key = DataKey::RematchParent(parent_id, child_id);
+    env.storage().persistent().remove(&key);
 }

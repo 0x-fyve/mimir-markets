@@ -1,4 +1,4 @@
-//! Typed contract events, mirroring the `event` declarations in MimirV2.sol.
+/// Typed contract events, mirroring the `event` declarations in MimirV2.sol.
 
 use soroban_sdk::{contractevent, Address, BytesN, String};
 
@@ -56,7 +56,7 @@ pub struct ClaimResolved {
 /// The versioned verdict written at resolution, emitted alongside
 /// `ClaimResolved`.
 ///
-/// `ClaimResolved` keeps its existing shape for compatible indexers; this event
+/// `ClaimResolvedkeeps its existing shape for compatible indexers; this event
 /// carries the explicit encoding version so consumers can pin the verdict
 /// encoding without a second read or a schema guess.
 #[contractevent]
@@ -98,10 +98,24 @@ pub struct CancellationRefused {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleQueued {
+    #[topic]
+    pub next: Address,
+    pub executable_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OracleChanged {
     #[topic]
     pub next: Address,
     pub previous: Option<Address>,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleCancelled {
+    pub cancelled: bool,
 }
 
 #[contractevent]
@@ -219,4 +233,63 @@ pub struct ChallengerPaid {
     pub gross: i128,
     pub fee: i128,
     pub net: i128,
+}
+
+/// Lifecycle state transition event for auditing and monitoring.
+/// Emitted on every state change with the previous and new states.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimStateTransitioned {
+    #[topic]
+    pub id: u64,
+    pub from_state: u32,
+    pub to_state: u32,
+    pub timestamp: u64,
+}
+
+/// Emitted when a claim's deadline is reached and it transitions to settlement-eligible.
+/// Useful for indexers and workers to identify claims ready for oracle resolution.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeadlineReached {
+    #[topic]
+    pub id: u64,
+    pub deadline: u64,
+    pub challenger_count: u32,
+    pub total_staked: i128,
+}
+
+/// Emitted when initial escrow is established for a claim.
+/// Records the initial funding state for accounting reconciliation.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowSeeded {
+    #[topic]
+    pub id: u64,
+    #[topic]
+    pub funder: Address,
+    pub amount: i128,
+    pub escrow_type: String,
+}
+
+/// Emitted on fixed-odds liquidity state changes beyond reservations.
+/// Tracks available creator liquidity for risk management.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiquidityUpdated {
+    #[topic]
+    pub id: u64,
+    pub reserved_liability: i128,
+    pub available_liquidity: i128,
+    pub total_creator_stake: i128,
+}
+
+/// Emitted when the global pause switch is flipped. Pausing only gates state
+/// mutations (creation, challenging, resolution, configuration); withdrawals and
+/// payout claims remain available so user funds are never trapped.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PauseStateChanged {
+    pub paused: bool,
+    pub timestamp: u64,
 }
