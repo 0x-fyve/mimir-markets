@@ -160,7 +160,7 @@ pub fn challenge_claim(
             return Ok(());
         }
     }
-    let max_challengers = claim.market.max_challengers.min($AX_CHALLENGERS);
+    let max_challengers = claim.market.max_challengers.min(MAX_CHALLENGERS);
     if claim.challenger_count >= max_challengers || list.len() >= max_challengers {
         return Err(Error::ClaimFull);
     }
@@ -387,9 +387,15 @@ pub fn cancel_claim(env &Env, claim_id: u64) -> Result<(), Error> {
     .publish(env);
 
     claim.state = ClaimState::Cancelled;
+    let creator = claim.creator.clone();
+    util::assert_claim_conservation(&claim)?;
     storage::set_claim(env, claim_id, &claim);
 
-    let creator = claim.creator.clone();
+    // Cancellation is a refund: no fee. A refund is not profit, so no fee leg
+    // can exist, and a failed push parks the refund as a withdrawable balance
+    // rather than failing a cancellation whose accounting is already final.
+    // The event reports the DELTA: the creator may already hold a parked
+    // balance from an earlier settlement, and that is not this refund.
     let usdc = storage::usdc(env)?;
     let pending_before = storage::withdrawable(env, &creator);
     if refund > 0 {

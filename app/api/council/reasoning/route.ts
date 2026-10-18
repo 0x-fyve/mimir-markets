@@ -14,7 +14,7 @@ import { paidRoute, queryParam } from "@/lib/x402/server";
 import { tracedRoute } from "@/lib/ops/trace-http";
 import type { HTTPRequestContext } from "@x402/core/http";
 import { PRICES } from "@/lib/x402/config";
-import { verifyPass } from "@/lib/paid-pass";
+import { verifyPass } from "@/lib/server/paid-pass";
 import { getPersonaBySlug } from "@/agents/council/personas";
 import { getCouncilAddress } from "@/lib/agent-wallets";
 import { readClaimRaw } from "@/lib/contract";

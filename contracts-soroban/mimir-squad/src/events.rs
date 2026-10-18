@@ -5,9 +5,9 @@ use soroban_sdk::{contractevent, Address, String};
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketCreated {
-    #topic]
+    #[topic]
     pub market_id: u64,
-    #topic]
+    #[topic]
     pub captain: Address,
     pub deadline: u64,
     pub fee_bps: u32,
@@ -19,7 +19,7 @@ pub struct MarketCreated {
 pub struct Deposited {
     #[topic]
     pub market_id: u64,
-    #topic]
+    #[topic]
     pub side: u32,
     #[topic]
     pub participant: Address,
@@ -32,7 +32,7 @@ pub struct Deposited {
 pub struct Withdrawn {
     #[topic]
     pub market_id: u64,
-    #topic]
+    #[topic]
     pub side: u32,
     #[topic]
     pub participant: Address,
@@ -42,7 +42,7 @@ pub struct Withdrawn {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Resolved {
-    #topic]
+    #[topic]
     pub market_id: u64,
     pub result: u32,
     pub pool_a: i128,
@@ -74,7 +74,7 @@ pub struct FeesClaimed {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketStateTransitioned {
-    #topic]
+    #[topic]
     pub market_id: u64,
     pub from_state: u32,
     pub to_state: u32,
@@ -85,7 +85,7 @@ pub struct MarketStateTransitioned {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketDeadlineReached {
-    #topic]
+    #[topic]
     pub market_id: u64,
     pub deadline: u64,
     pub pool_a_total: i128,
@@ -97,9 +97,9 @@ pub struct MarketDeadlineReached {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LiquidityAdded {
-    #topic]
+    #[topic]
     pub market_id: u64,
-    #topic]
+    #[topic]
     pub side: u32,
     pub amount: i128,
     pub new_pool_total: i128,
@@ -113,7 +113,7 @@ pub struct LiquidityAdded {
 pub struct LiquidityRemoved {
     #[topic]
     pub market_id: u64,
-    #topic]
+    #[topic]
     pub side: u32,
     pub amount: i128,
     pub new_pool_total: i128,
@@ -207,9 +207,9 @@ pub struct PauseStateChanged {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawalWhilePaused {
-    #topic]
+    #[topic]
     pub market_id: u64,
-    #topic]
+    #[topic]
     pub participant: Address,
     pub amount: i128,
 }

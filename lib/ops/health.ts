@@ -16,6 +16,13 @@
  *     markets looks best exactly when settlement is stuck, because the stuck ones
  *     are not in the average. So the settlement alarm reads the age of the oldest
  *     overdue market instead.
+ *  4. **Dependency health categories.** Dependencies are categorized by their
+ *     impact on the system: `invalid` (never reported), `stale` (late),
+ *     `duplicated` (conflicting state), `cancelled` (explicitly disabled),
+ *     and `dependency-failure` (downstream errors).
+ *     This categorization allows Mimir to keep contract-first, privacy-safe
+ *     behavior at the API boundary by exposing these categories without
+ *     leaking internal implementation details.
  */
 
 import { isTraceId } from "./trace-id";
@@ -87,6 +94,13 @@ export interface HealthSnapshot {
   facilitator: FailureWindow;
   /** Research source fetches — a soft dependency, so warn only. */
   sources: FailureWindow;
+  /**
+   * Decimal USDC balances for the worker agents, keyed by the worker role
+   * (e.g., "oracle"). `null` means the agent has no account or trustline.
+   * Optional: collectors that do not read balances (the public status
+   * surface, fault-injection profiles) omit it and raise no balance alarms.
+   */
+  agentBalancesUsdc?: Record<string, number | null>;
 }
 
 export interface Thresholds {
@@ -105,6 +119,8 @@ export interface Thresholds {
   facilitatorFailureWarn: number;
   facilitatorFailureCritical: number;
   sourceFailureWarn: number;
+  agentBalanceWarnUsdc: number;
+  agentBalanceCriticalUsdc: number;
 }
 
 /**
@@ -130,6 +146,8 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   facilitatorFailureWarn: 0.05,
   facilitatorFailureCritical: 0.25,
   sourceFailureWarn: 0.3,
+  agentBalanceWarnUsdc: 1,
+  agentBalanceCriticalUsdc: 0.1,
 };
 
 /**
@@ -202,6 +220,8 @@ export interface HealthReport {
      * outside a cycle, or a worker that has never reported.
      */
     workerTraceIds: Record<string, string | null>;
+    /** Decimal USDC balance per worker agent; null where it has no trustline. */
+    agentBalancesUsdc: Record<string, number | null>;
   };
 }
 
@@ -341,6 +361,35 @@ export function evaluateHealth(
   );
   if (sources) alarms.push(sources);
 
+  for (const [name, balance] of Object.entries(snapshot.agentBalancesUsdc ?? {})) {
+    if (balance === null) {
+      alarms.push({
+        id: `agent.${name}.untrusted`,
+        severity: "critical",
+        message: `agent ${name} has no USDC trustline or account`,
+        observed: 0,
+        threshold: t.agentBalanceCriticalUsdc,
+        unit: "count",
+      });
+    } else {
+      const balanceAlarm = threshold(
+        `agent.${name}.balance`,
+        -balance,
+        -t.agentBalanceWarnUsdc,
+        -t.agentBalanceCriticalUsdc,
+        "count",
+        (level) => `agent ${name} USDC balance is low: ${balance.toFixed(2)} (${level})`,
+      );
+      if (balanceAlarm) {
+        alarms.push({
+          ...balanceAlarm,
+          observed: balance,
+          threshold: balanceAlarm.severity === "critical" ? t.agentBalanceCriticalUsdc : t.agentBalanceWarnUsdc,
+        });
+      }
+    }
+  }
+
   return {
     status: worstSeverity(alarms),
     // Critical first so a truncated pager message still carries the worst news.
@@ -355,6 +404,7 @@ export function evaluateHealth(
       sourceFailureRatio: failureRatio(snapshot.sources),
       workerAgesSec,
       workerTraceIds,
+      agentBalancesUsdc: { ...(snapshot.agentBalancesUsdc ?? {}) },
     },
   };
 }

@@ -425,6 +425,7 @@ export function evaluateOperationalStatusReport(
           sourceFailureRatio: 0,
           workerAgesSec: {},
           workerTraceIds: {},
+          agentBalancesUsdc: {},
         },
       };
 

@@ -1,3 +1,5 @@
+import { isValidBps } from "./money";
+
 /**
  * What the creator signs when composing a basket. Readable, because a hardware
  * wallet shows it verbatim.
@@ -59,6 +61,35 @@ export function transferMessage(args: {
     `to: ${args.newOwner}`,
     `nonce: ${args.nonce}`,
     `expiresAt: ${new Date(args.expiresAt).toISOString()}`,
+  ].join("\n");
+}
+
+/**
+ * What a subscriber signs to follow or unfollow a basket.
+ *
+ * The action is part of the signed text, so a subscribe signature can never be
+ * presented as an unsubscribe (or the reverse), and the nonce plus a short
+ * expiry make each signature single-use. The address is interpolated
+ * VERBATIM: a Stellar strkey is case-sensitive base32. Shared by the route and
+ * the browser so both build the message byte for byte.
+ */
+export function subscriptionMessage(args: {
+  action: "subscribe" | "unsubscribe";
+  basketId: string;
+  subscriber: string;
+  perMarketUsdc: number;
+  nonce: string;
+  expiresAt: number;
+}): string {
+  return [
+    "Mimir basket subscription",
+    `action: ${args.action}`,
+    `basket: ${args.basketId}`,
+    `subscriber: ${args.subscriber}`,
+    `per market: ${args.perMarketUsdc} USDC`,
+    `nonce: ${args.nonce}`,
+    `expiresAt: ${new Date(args.expiresAt).toISOString()}`,
+    "Mimir never holds your funds. Every stake is signed by you.",
   ].join("\n");
 }
 
@@ -134,6 +165,7 @@ export interface BasketExposurePreview {
 
 export function validateBasket(weights: BasketAgentWeight[], policy: BasketPolicy): string[] {
   const errors: string[] = [];
+  if (weights.some((item) => !isValidBps(item.weightBps))) errors.push("weights_must_be_integers");
   if (weights.reduce((sum, item) => sum + item.weightBps, 0) !== 10_000) errors.push("weights_must_total_10000_bps");
   if (new Set(weights.map((item) => item.agentId)).size !== weights.length) errors.push("duplicate_agent");
   if (weights.some((item) => item.weightBps <= 0 || item.weightBps > policy.maxSingleAgentBps)) errors.push("single_agent_exposure");

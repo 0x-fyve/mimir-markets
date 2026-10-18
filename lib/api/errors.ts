@@ -117,7 +117,7 @@ export interface ApiErrorResult {
 export function apiError(
   code: ApiErrorCode,
   message: string,
-  opts: { field?: string; retryAfterSeconds?: number } = {},
+  opts: { field?: string; retryAfterSeconds?: number; requestId?: string } = {},
 ): ApiErrorResult {
   const spec = SPECS[code];
   const retryAfter = opts.retryAfterSeconds ?? spec.retryAfterSeconds;
@@ -128,11 +128,10 @@ export function apiError(
       retryable: spec.retryable,
       ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}),
       ...(opts.field ? { field: opts.field } : {}),
+      ...(opts.requestId ? { requestId: opts.requestId } : {}),
     },
   };
   const headers: Record<string, string> = {};
-  // Only advertise Retry-After when waiting can actually help; on a 400 it would
-  // be an invitation to retry a request that cannot succeed.
   if (spec.retryable && retryAfter !== undefined && retryAfter > 0) {
     headers["retry-after"] = String(Math.ceil(retryAfter));
   }
@@ -147,6 +146,19 @@ export function apiError(
     headers[TRACE_HEADER] = traceId;
   }
   return { status: spec.status, body, headers };
+}
+
+export function withRequestId(result: ApiErrorResult, requestId: string): ApiErrorResult {
+  return {
+    ...result,
+    body: {
+      ...result.body,
+      error: {
+        ...result.body.error,
+        requestId,
+      },
+    },
+  };
 }
 
 export function isRetryable(code: ApiErrorCode): boolean {

@@ -1111,6 +1111,18 @@
     "trustlineAdding": "Confirm in wallet...",
     "trustlineRejected": "Trustline signature rejected in your wallet."
   },
+  "fees": {
+    "loadFailed": "Could not read the fee schedule from the network.",
+    "agentWhatYouEarn": "What you earn",
+    "agentDescription1": "When somebody else profits through your agent you take <strong>{agent}%</strong> of their profit, and the protocol takes <strong>{platform}%</strong>. Fees are charged on profit only, never on the stake - so a winner never receives less than they put in, and a loser is charged nothing.",
+    "agentDescription2": "Using your own agent costs you no agent fee. You would only be paying yourself.",
+    "basketWhatYouEarn": "What you earn",
+    "basketDescription1": "When somebody profits by following your basket you take <strong>{basket}%</strong> of their profit. The agents' owners keep their <strong>{agent}%</strong> and the protocol takes <strong>{platform}%</strong> - all charged on profit only.",
+    "basketDescription2": "Following your own basket costs you no basket fee.",
+    "followDescription": "On profit: {platform}% protocol, {agent}% to the agents' owners, {basketPart}. Losses are never charged.",
+    "followBasketIsOwn": "and no basket fee — this basket is yours",
+    "followBasketCreator": "{basket}% to whoever composed it"
+  },
   "categories": {
     "sports": "Sports",
     "weather": "Weather",
@@ -1193,6 +1205,13 @@
     "chatPreviewBubblePeerShort": "👍",
     "chatPreviewInputPlaceholder": "Unavailable until the thread opens",
     "chatPreviewFootnote": "Sample layout only — nothing is sent over XMTP until the rival is reachable."
+  },
+  "agentDirectory": {
+    "emptyStateTitle": "No agents found",
+    "emptyStateDescription": "No agents are configured in this deploy. Start by creating the first agent.",
+    "errorTitle": "Could not load agents",
+    "errorDescription": "There was a problem reading the directory. This might be a temporary dependency failure or a network issue.",
+    "createAction": "Create an agent"
   },
   "messagesHub": {
     "eyebrow": "End-to-end encrypted · XMTP",

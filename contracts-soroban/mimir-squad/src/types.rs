@@ -38,7 +38,18 @@ pub const BPS_DIVISOR: i128 = 10_000;
 /// `initialize` refuses a token that reports any other.
 pub const USDC_DECIMALS: u32 = 7;
 
+/// A queued oracle rotation cannot take effect before this much time passes.
+pub const ORACLE_TIMELOCK_SECONDS: u64 = 172_800; // 2 days
+
 // ── Storage shapes ───────────────────────────────────────────────────────────
+
+/// A queued oracle rotation, executable once `executable_at` has passed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingOracle {
+    pub next: Address,
+    pub executable_at: u64,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,4 +117,15 @@ pub enum Error {
     /// `participants_a + participants_b == MAX_SQUAD_MEMBERS` even if the target
     /// side still has room.
     SquadFull = 28,
+    /// A payout could not be delivered because the token transfer trapped
+    /// (frozen or deauthorized trustline). The amount is parked, not lost:
+    /// `claim` succeeds and holds it, `claim_parked_payout` retries it.
+    PayoutParked = 29,
+    /// `cancel_market` was called on a market that is already resolved or
+    /// cancelled.
+    AlreadyResolved = 30,
+    /// `cancel_oracle` / `execute_oracle` found no queued oracle rotation.
+    NothingQueued = 31,
+    /// `execute_oracle` was called before the rotation's timelock elapsed.
+    Timelocked = 32,
 }
