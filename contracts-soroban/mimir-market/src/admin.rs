@@ -118,7 +118,7 @@ pub fn cancel_oracle(env: &Env) -> Result<(), Error> {
 pub fn execute_oracle(env: &Env) -> Result<(), Error> {
     let queued = storage::pending_oracle(env).ok_or(Error::NothingQueued)?;
     if env.ledger().timestamp() < queued.executable_at {
-        return Err(Error::Timelocked);
+        return Err((Error::Timelocked);
     }
     let previous = storage::oracle(env)?;
     storage::set_oracle(env, &queued.next);

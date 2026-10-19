@@ -13,6 +13,7 @@ use crate::types::{
     PayoutQuote, PendingFeePolicy, PendingOracle, PlatformStats, Verdict, WinnerSide,
     MAX_BATCH_SIZE,
 };
+use crate::pause;
 
 #[contract]
 pub struct MimirMarket;
@@ -131,6 +132,25 @@ impl MimirMarket {
         )
     }
 
+    // ── Pause controls ───────────────────────────────────────────────────────
+
+    /// Pause new money-in flows (claim creation, challenging). Withdrawals,
+    /// fee claims, and challenger payouts remain available while paused so
+    /// users can always exit with their funds.
+    pub fn pause(env: Env, caller: Address) -> Result<(), Error> {
+        pause::pause(&env, &caller)
+    }
+
+    /// Unpause the market, restoring new money-in flows.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), Error> {
+        pause::unpause(&env, &caller)
+    }
+
+    /// Whether the market is currently paused for new money-in flows.
+    pub fn is_paused(env: Env) -> bool {
+        pause::is_paused(&env)
+    }
+
     
     pub fn transition_deadline(env: Env, claim_id: u64) -> Result<(), Error> {
         claims::transition_deadline(&env, claim_id)
@@ -147,6 +167,9 @@ impl MimirMarket {
     /// `resolve_claim` deliberately does NOT loop over challengers: a Stellar
     /// transaction is capped on its ledger-entry footprint, and paying ~100
     /// challengers at once does not fit. Returns the net amount credited.
+    ///
+    /// Pause controls never block this path: challengers can always pull their
+    /// settlement even while the market is paused.
     pub fn claim_challenger_payout(
         env: Env,
         challenger: Address,
@@ -159,10 +182,15 @@ impl MimirMarket {
 
     /// Solidity used `msg.sender`; Soroban has no equivalent for a top-level
     /// call, so the beneficiary is an explicit argument that must authorize.
+    ///
+    /// Pause controls never block withdrawals: this entry point remains
+    /// callable while the market is paused so users can always exit.
     pub fn withdraw(env: Env, who: Address) -> Result<i128, Error> {
         resolve::withdraw(&env, who)
     }
 
+    /// Pause controls never block fee claims: recipients can always pull
+    /// accrued fees even while the market is paused.
     pub fn claim_fees(env: Env, who: Address) -> Result<i128, Error> {
         resolve::claim_fees(&env, who)
     }
@@ -351,5 +379,10 @@ impl MimirMarket {
 
     pub fn get_accrued_fees(env: Env, who: Address) -> i128 {
         storage::accrued_fees(&env, &who)
+    }
+
+    /// Whether the market is currently paused for new money-in flows.
+    pub fn get_paused(env: Env) -> bool {
+        pause::is_paused(&env)
     }
 }

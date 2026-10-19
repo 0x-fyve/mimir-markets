@@ -1,12 +1,12 @@
 //! Public contract surface. Bodies live in `pool`; this file is the single
 //! `#[contractimpl]` block plus the read-only views.
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 use crate::escrow;
 use crate::pool;
 use crate::storage;
-use crate::types::{ClaimResult, Error, Market, PendingOracle};
+use crate::types::{ClaimResult, Error, Market, PendingOracle, MAX_BATCH_SIZE};
 
 #[contract]
 pub struct MimirSquad;
@@ -53,16 +53,6 @@ impl MimirSquad {
         pool::withdraw_before_deadline(&env, participant, market_id, side, amount)
     }
 
-    /// Pause or unpause the market. Pausing must never block withdrawals or
-    /// claims; it only gates new deposits and market creation.
-    pub fn set_paused(env: Env, paused: bool) -> Result<(), Error> {
-        pool::set_paused(&env, paused)
-    }
-
-    pub fn is_paused(env: Env) -> bool {
-        pool::is_paused(&env)
-    }
-
     
     pub fn transition_deadline(env: Env, market_id: u64) -> Result<(), Error> {
         pool::transition_deadline(&env, market_id)
@@ -86,6 +76,16 @@ impl MimirSquad {
         pool::claim(&env, participant, market_id, side)
     }
 
+    /// Pause or unpause the market. Pausing must never block withdrawals or
+    /// claims; it only gates new deposits and market creation.
+    pub fn set_paused(env: Env, paused: bool) -> Result<(), Error> {
+        pool::set_paused(&env, paused)
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
+    }
+
     pub fn claim_fees(env: Env) -> Result<i128, Error> {
         pool::claim_fees(&env)
     }
@@ -106,6 +106,24 @@ impl MimirSquad {
 
     pub fn get_market(env: Env, market_id: u64) -> Result<Market, Error> {
         storage::get_market(&env, market_id)
+    }
+
+    pub fn get_markets_batch(
+        env: Env,
+        ids: Vec<u64>,
+    ) -> Result<Vec<Option<Market>>, Error> {
+        if ids.len() > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
+        }
+        if !storage::is_initialized(&env) {
+            return Err(Error::NotInitialized);
+        }
+
+        let mut results: Vec<Option<Market>> = Vec::new(&env);
+        for id in ids.iter() {
+            results.push_back(storage::get_market_opt(&env, id));
+        }
+        Ok(results)
     }
 
     pub fn get_deposit(env: Env, market_id: u64, side: u32, who: Address) -> i128 {

@@ -1,6 +1,6 @@
 /// Typed contract events, mirroring the `event` declarations in MimirV2.sol.
 
-use soroban_sdk::{contractevent, Address, BytesN, String};
+use soroban_sdk:{contractevent, Address, BytesN, String};
 
 use crate::types::WinnerSide;
 
@@ -56,7 +56,7 @@ pub struct ClaimResolved {
 /// The versioned verdict written at resolution, emitted alongside
 /// `ClaimResolved`.
 ///
-/// `ClaimResolvedkeeps its existing shape for compatible indexers; this event
+/// `ClaimResolved` keeps its existing shape for compatible indexers; this event
 /// carries the explicit encoding version so consumers can pin the verdict
 /// encoding without a second read or a schema guess.
 #[contractevent]
@@ -140,6 +140,20 @@ pub struct Withdrawal {
     #[topic]
     pub to: Address,
     pub amount: i128,
+}
+
+/// Emitted when a withdrawal is attempted while the contract is paused.
+/// Withdrawals are always allowed during a pause; this event is the on-chain
+/// record that the pause control did not block the funds from leaving.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WithdrawalAllowedDuringPause {
+    #[topic]
+    pub to: Address,
+    pub amount: i128,
+    /// Whether the attempted withdrawal completed immediately or was parked as a
+    /// withdrawable balance because the trustline refused the transfer.
+    pub parked: bool,
 }
 
 #[contractevent]
@@ -282,14 +296,4 @@ pub struct LiquidityUpdated {
     pub reserved_liability: i128,
     pub available_liquidity: i128,
     pub total_creator_stake: i128,
-}
-
-/// Emitted when the global pause switch is flipped. Pausing only gates state
-/// mutations (creation, challenging, resolution, configuration); withdrawals and
-/// payout claims remain available so user funds are never trapped.
-#[contractevent]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PauseStateChanged {
-    pub paused: bool,
-    pub timestamp: u64,
 }

@@ -36,9 +36,8 @@ pub enum DataKey {
     Withdrawable(Address),
     /// Accrued, unclaimed fees. Always pulled, never pushed.
     Accrued(Address),
-    /// Global pause flag. When set, state-mutating entry points are blocked
-    /// EXCEPT withdrawals and other pull-payment paths, which must always
-    /// remain available so users can exit with their funds.
+    /// Global pause flag. When set, state-changing market actions are blocked
+    /// EXCEPT withdrawals, fee pulls, and other exit paths.
     Paused,
     /// Rematch parent link validation cache: (parent_id, child_id) -> RematchStatus
     RematchParent(u64, u64),
@@ -127,10 +126,8 @@ pub fn clear_pending_oracle(env: &Env) {
     env.storage().instance().remove(&DataKey::PendingOracle);
 }
 
-/// Whether the contract is currently paused.
-///
-/// Absent means "not paused" so pre-pause deployments and freshly
-/// initialised contracts behave as unpaused without an explicit write.
+/// Whether the market is currently paused. Defaults to `false` so an
+/// uninitialised or pre-pause deployment reads as live.
 pub fn is_paused(env: &Env) -> bool {
     env.storage()
         .instance()
@@ -282,15 +279,6 @@ pub fn set_challengers(env: &Env, id: u64, list: &Vec<Challenger>) {
     env.storage()
         .persistent()
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_EXTEND);
-}
-
-/// True when the contract is paused. Callers on state-mutating paths should
-/// gate on this; withdrawal and pull-payment paths must NOT gate on it.
-pub fn require_not_paused(env: &Env) -> Result<(), Error> {
-    if is_paused(env) {
-        return Err(Error::Paused);
-    }
-    Ok(())
 }
 
 // ── Versioned verdicts ───────────────────────────────────────────────────────
