@@ -1,5 +1,6 @@
 import { Pool, type PoolConfig } from "@neondatabase/serverless";
 
+import type { RateLimitStore } from "@/lib/api/rate-limit";
 import type { ChallengeOpportunity } from "@/lib/claimDrafts";
 import type { ClaimChallenger, ClaimData } from "@/lib/contract";
 import type { AgentApiKeyRecord } from "@/lib/agents/api-keys";
@@ -301,6 +302,20 @@ export const SCHEMA_STATEMENTS: SqlStatement[] = [
   // (the envelope skew window has long since closed) and should be pruned.
   { sql: "ALTER TABLE agent_api_nonces ADD COLUMN IF NOT EXISTS expires_at BIGINT NOT NULL DEFAULT 0" },
   { sql: "CREATE INDEX IF NOT EXISTS idx_agent_api_nonces_expires ON agent_api_nonces(expires_at)" },
+  // Shared rate-limit buckets. One row per (dimension, key, window); the window
+  // is part of the primary key so a new window starts from zero without a
+  // delete. `expires_at` is epoch ms and rows past it are pruned by
+  // pruneExpiredRateLimits(). The atomic upsert in consumeRateLimit() is what
+  // makes the count hold across instances.
+  { sql: `CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+    dimension TEXT NOT NULL,
+    bucket_key TEXT NOT NULL,
+    window_start BIGINT NOT NULL,
+    count BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (dimension, bucket_key, window_start)
+  )` },
+  { sql: "CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_expires ON rate_limit_buckets(expires_at)" },
   { sql: `CREATE TABLE IF NOT EXISTS agent_api_keys (
     key_id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL,
@@ -2596,6 +2611,72 @@ export async function listAgentRecords(limit = 100): Promise<AgentRecord[]> {
       revokedReason: row.revoked_reason == null ? undefined : getString(row.revoked_reason),
     };
   });
+}
+
+// ── Postgres-backed rate-limit store ──────────────────────────────────────────
+// Implements the same contract as the in-memory store in lib/api/rate-limit.ts.
+// The atomic INSERT ... ON CONFLICT ... RETURNING is what makes the count hold
+// across serverless instances: two concurrent requests for the same bucket
+// serialise on the row, so neither can read a stale count and both increment.
+
+/**
+ * Increment the bucket for (dimension, key, windowStart) and return the new
+ * count. `expiresAt` is epoch ms at which the row becomes garbage.
+ *
+ * The window is part of the primary key, so a request landing in a new window
+ * inserts a fresh row at count 1 rather than resetting the old one — a reset
+ * would race with a concurrent request still in the previous window.
+ */
+export async function consumeRateLimit(args: {
+  dimension: string;
+  key: string;
+  windowStart: number;
+  expiresAt: number;
+}): Promise<number> {
+  const pool = await getDb();
+  const result = await execute(pool, {
+    sql: `INSERT INTO rate_limit_buckets (dimension, bucket_key, window_start, count, expires_at)
+      VALUES (?, ?, ?, 1, ?)
+      ON CONFLICT(dimension, bucket_key, window_start) DO UPDATE SET
+        count = rate_limit_buckets.count + 1,
+        expires_at = GREATEST(rate_limit_buckets.expires_at, excluded.expires_at)
+      RETURNING count`,
+    args: [args.dimension, args.key, args.windowStart, args.expiresAt],
+  });
+  const row = result.rows[0];
+  return row ? getNumber((row as Record<string, unknown>).count) : 0;
+}
+
+/**
+ * Delete rate-limit rows whose window has closed.
+ *
+ * Safe to call at any time: a row with `expires_at <= now` belongs to a window
+ * that can no longer be presented, so deleting it cannot let a request through.
+ * Returns the number of rows deleted.
+ */
+export async function pruneExpiredRateLimits(now: number): Promise<number> {
+  const pool = await getDb();
+  const result = await pool.query(
+    "DELETE FROM rate_limit_buckets WHERE expires_at <= $1",
+    [now],
+  );
+  return result.rowCount ?? 0;
+}
+
+/**
+ * Postgres-backed `RateLimitStore`. Constructed by `lib/api/rate-limit.ts` when
+ * `RATE_LIMIT_STORE=postgres` is set; the caller is responsible for falling
+ * back to the in-memory store on any error thrown here.
+ */
+export function createPostgresRateLimitStore(): RateLimitStore {
+  return {
+    async consume(dimension, key, windowStart, expiresAt) {
+      return consumeRateLimit({ dimension, key, windowStart, expiresAt });
+    },
+    async prune(now) {
+      return pruneExpiredRateLimits(now);
+    },
+  };
 }
 
 // ── User-created baskets ──────────────────────────────────────────────────────
