@@ -93,6 +93,14 @@ jobs:
       - run: npm run check:terms
       - run: npm run check:toolchains
       - run: npm run check:schema-snapshot
+      # Locale completeness and driver parity guards: run once, not per tier.
+      # `--strict` (check:locales:strict) is the CI-grade variant referenced by
+      # docs/LOCALIZATION.md; check:driver-parity pins the path lists against
+      # lib/ci/path-scope.ts (see scripts/ci/changed-paths.mjs).
+      - if: matrix.tier == 'app'
+        run: npm run check:locales:strict
+      - if: matrix.tier == 'app'
+        run: npm run check:driver-parity
       - run: npm run typecheck
       # The published agent API contract must be what the live code serves. Fails
       # if docs/openapi-agent-v1.yaml or schemas/agent-api-v1.schema.json drift;
