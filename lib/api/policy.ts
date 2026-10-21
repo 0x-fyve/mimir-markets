@@ -153,12 +153,12 @@ function secretsMatch(presented: string, expected: string): boolean {
   return diff === 0;
 }
 
-export function authorizeRequest(
+export async function authorizeRequest(
   tier: AccessTier,
   ctx: RequestContext,
   rules: LimitRule[] = DEFAULT_RULES,
   now = Date.now(),
-): AuthorizeResult {
+): Promise<AuthorizeResult> {
   const policy = TIER_POLICIES[tier];
   const refuse = (code: ApiErrorCode, detail: string): AuthorizeResult => ({
     allowed: false,
@@ -209,7 +209,9 @@ export function authorizeRequest(
     agentId: policy.limitDimensions.includes("agent") ? ctx.agentId : undefined,
   };
   const applicable = rules.filter((rule) => policy.limitDimensions.includes(rule.dimension));
-  const decision = consume(keys, applicable, now);
+  // consume() is async because an optional Postgres-backed store can be selected;
+  // the default in-memory store resolves immediately.
+  const decision = await consume(keys, applicable, now);
   if (!decision.allowed) {
     return refuse(
       "rate_limited",

@@ -298,7 +298,7 @@ async function handleAgentApiPost(
       return json({ error: { message: "signature rejected" } }, 401);
     }
     const { authorizeRequest } = await import("@/lib/api/policy");
-    const gate = authorizeRequest("registered_agent", {
+    const gate = await authorizeRequest("registered_agent", {
       route: `/api/agents/v1/${action}`,
       wallet: signer,
       agentId: agent.agentId,

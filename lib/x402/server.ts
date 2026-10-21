@@ -229,7 +229,7 @@ export function paidRoute<T>(
     const mutatesValue = req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS";
     const originValid = verifyBrowserOrigin(req);
 
-    const rlGate = authorizeRequest(tier, {
+    const rlGate = await authorizeRequest(tier, {
       route: req.nextUrl.pathname,
       ip,
       wallet,

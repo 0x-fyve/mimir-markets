@@ -40,7 +40,7 @@ function clientIp(req: NextRequest): string | undefined {
 }
 
 export async function GET(req: NextRequest) {
-  const gate = authorizeRequest("public_read", { route: "/api/baskets", ip: clientIp(req) });
+  const gate = await authorizeRequest("public_read", { route: "/api/baskets", ip: clientIp(req) });
   if (!gate.allowed && gate.error) {
     return NextResponse.json(gate.error.body, { status: gate.error.status, headers: gate.error.headers });
   }
@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const gate = authorizeRequest("public_read", { route: "/api/baskets", ip: clientIp(req) });
+  const gate = await authorizeRequest("public_read", { route: "/api/baskets", ip: clientIp(req) });
   if (!gate.allowed && gate.error) {
     return NextResponse.json(gate.error.body, { status: gate.error.status, headers: gate.error.headers });
   }
