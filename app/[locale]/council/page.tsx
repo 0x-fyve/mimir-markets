@@ -12,11 +12,6 @@ import { openPeepsAvatar } from "@/lib/avatars";
 import { AddressChip } from "@/components/ui/AddressChip";
 import { CouncilPanelSkeleton } from "@/components/ui/AsyncPanelSkeleton";
 
-export const metadata = {
-  title: "Council",
-  description: "Twenty AI personas reading on-chain claims and staking USDC based on character.",
-};
-
 export const revalidate = 30;
 
 // ── Data ─────────────────────────────────────────────────────────────────────
