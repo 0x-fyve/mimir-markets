@@ -5,6 +5,8 @@ CAIP-2 stellar:testnet).
 
 See docs/STELLAR_NETWORK.md for the one-page architecture reference.
 
+See docs/PUBLIC_API.md for the public read endpoints (`/api/vs`, `/api/vs/[id]`, `/api/vs/[id]/reasoning`, `/api/vs/user/[address]`, `/api/challenge-opportunities`, `/api/performance/[address]`, `/api/baskets`, `/api/payments/revenue`, `/api/health`), their params, response shapes, error envelope, `Cache-Control` headers, and rate-limit tier (`public_read`). Private claims require the `invite` parameter.
+
 Repository layout
 Path	Purpose
 contracts-soroban/mimir-market/	Rust/Soroban market contract (USDC escrow, settlement, fee policy)
@@ -93,6 +95,7 @@ environment behavior.
 | `tests/node/node-test-runner.test.ts` | Regression tests for runner safety, cache invalidation, failure handling, and coverage publication |
 | `scripts/lib/browser-smoke-env.mjs` | The smoke harness's strict env allowlist (what a smoke build may see) |
 | `tests/browser/` + `playwright.config.ts` | Playwright browser smoke suite (run via `npm run smoke:browser`) |
+| `docs/PUBLIC_API.md` | Reference for the public read endpoints: params, response shape, errors, cache headers, rate-limit tier |
 
 ## Browser smoke flow (must stay green on release)
 
@@ -115,6 +118,9 @@ heading marker from messages/en.json.
 New secret-shaped env vars: if you add one, confirm it is not in the
 smoke allowlist; add it to the secret samples in tests/node/browser-smoke-env.test.ts.
 Run it before finishing a release-touching PR: npm run smoke:browser.
+Public read endpoints are documented in `docs/PUBLIC_API.md`; keep it in sync
+when adding or changing a route under `app/api/**/route.ts` (outside `agents/v1`
+and `cron`).
 Key rules
 Contract state is the source of truth. Neon Postgres is a read-index cache only.
 Two assets, one job each. Native XLM pays the ledger fee and the account
