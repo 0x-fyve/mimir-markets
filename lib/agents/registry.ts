@@ -54,6 +54,30 @@ export function isAgentCapability(value: string): value is AgentCapability {
 }
 
 /**
+ * The shape an agent id must have.
+ *
+ * Lowercase alphanumerics with single `-`/`_` separators, 1–64 chars. Capped so
+ * a query parameter cannot smuggle an arbitrarily long string into the SQL
+ * layer or the logs; anchored so a partial match cannot slip through.
+ */
+export const AGENT_ID_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
+export const AGENT_ID_MAX_LENGTH = 64;
+
+/**
+ * True when `value` is a well-formed agent id.
+ *
+ * Used by the reasoning feed to reject malformed `agent` filters before they
+ * reach `getReasoningFeed`, and by registration to keep ids addressable.
+ */
+export function isAgentId(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= AGENT_ID_MAX_LENGTH &&
+    AGENT_ID_PATTERN.test(value)
+  );
+}
+
+/**
  * Escalating authority. Each level is a superset of the one below, and every
  * level above 0 requires an explicit owner grant — never reputation alone.
  */
