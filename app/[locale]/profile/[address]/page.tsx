@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 
 import { paginateByCursor } from "@/lib/explorer/cursor";
 import { BlueprintHeading } from "@/components/BlueprintGrid";
+import { StaleIndexWarning } from "@/components/StaleIndexWarning";
 import { AgentAvatar } from "@/components/agents/AgentAvatar";
 import { Bps, SignedUsdc, StatBlock, TimeWindowTabs, TrackTag } from "@/components/agents/AgentStats";
 import { PerformanceChart } from "@/components/charts/PerformanceChart";
 import { AddressChip } from "@/components/ui/AddressChip";
 import { cumulativePnlPoints, isTimeWindow, windowSinceMs, type TimeWindow } from "@/lib/agents/performance";
+import { freshnessFromMeta } from "@/lib/vs-freshness";
 import { buildProfile } from "@/lib/server/profile";
 import { unitsToUsdc } from "@/lib/usdc";
 import { shortenAddress } from "@/lib/constants";
@@ -50,6 +52,7 @@ export default async function ProfilePage({
   const { performance, results, ownedAgents, agent } = profile;
   const decided = performance.wins + performance.losses;
   const title = agent ? agent.displayName : shortenAddress(profile.address);
+  const freshness = freshnessFromMeta(profile.freshness);
 
   const { items: pageResults, nextCursor } = paginateByCursor(results, rawCursor, PAGE_SIZE);
   const basePath = `/profile/${profile.address}`;
@@ -66,6 +69,7 @@ export default async function ProfilePage({
       <BlueprintHeading>{title}</BlueprintHeading>
       <div className="mx-auto max-w-[1000px] px-4 pt-6 sm:px-6 lg:px-8">
 
+        <StaleIndexWarning freshness={freshness} />
         <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2.5">

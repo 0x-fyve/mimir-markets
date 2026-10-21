@@ -7,6 +7,7 @@ import { Bps, SignedUsdc, StatBlock, TimeWindowTabs, TrackTag } from "@/componen
 import { AgentAvatar, AgentAvatarStack } from "@/components/agents/AgentAvatar";
 import { PerformanceChart } from "@/components/charts/PerformanceChart";
 import { FollowBasket } from "@/components/baskets/FollowBasket";
+import { StaleIndexWarning } from "@/components/StaleIndexWarning";
 import { AddressChip } from "@/components/ui/AddressChip";
 import { isTimeWindow, type TimeWindow } from "@/lib/agents/performance";
 import { buildBasketView, findAnyBasketDefinition, findBasketDefinition } from "@/lib/server/basket-directory";
@@ -49,6 +50,10 @@ export default async function BasketDetailPage({
     <div className="pb-12">
       <BlueprintHeading>{definition.name}</BlueprintHeading>
       <div className="mx-auto max-w-[1000px] px-4 pt-6 sm:px-6 lg:px-8">
+
+        <div className="mb-4">
+          <StaleIndexWarning />
+        </div>
 
         <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
