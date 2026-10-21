@@ -58,6 +58,7 @@ import { filterJoinableClaims, shouldBuySecondOpinion } from "./policy";
 
 const POLL_INTERVAL_MS = Number(process.env.TRADER_POLL_INTERVAL_MS ?? "900000");
 const MAX_STAKES_PER_CYCLE = Number(process.env.TRADER_MAX_STAKES_PER_CYCLE ?? "1");
+const MAX_PAID_READS_PER_CYCLE = Number(process.env.TRADER_MAX_PAID_READS_PER_CYCLE ?? "3");
 const DRY_RUN = process.env.TRADER_DRY_RUN === "1";
 /**
  * Where to buy a second opinion. Agents paying agents is the point of x402 here:
@@ -74,6 +75,18 @@ interface Decision {
   verdict: TraderVerdict;
   confidence: number;
   reasoning: string;
+}
+
+/**
+ * Pure counter for paid oracle reads within a single cycle.
+ *
+ * Returns true when another paid read may be bought, false once the configured
+ * cap is reached. A cap of 0 (or any non-positive value) disables paid reads
+ * entirely. Extracted so the budget logic can be unit-tested without a wallet.
+ */
+export function canBuyPaidRead(paidReadsSoFar: number, cap: number): boolean {
+  if (!Number.isFinite(cap) || cap <= 0) return false;
+  return paidReadsSoFar < cap;
 }
 
 function walletFor(persona: TraderPersona): AgentWallet | null {
@@ -339,9 +352,14 @@ async function runTrader(persona: TraderPersona): Promise<void> {
   const maxDaily = record.limits.maxDailyExposureUsdc;
 
   let staked = 0;
+  let paidReads = 0;
   for (const claim of joinable) {
     if (staked >= MAX_STAKES_PER_CYCLE) break;
-    const secondOpinion = await buyOracleOpinion(wallet, claim);
+    let secondOpinion: string | null = null;
+    if (canBuyPaidRead(paidReads, MAX_PAID_READS_PER_CYCLE)) {
+      secondOpinion = await buyOracleOpinion(wallet, claim);
+      if (secondOpinion) paidReads += 1;
+    }
     const decision = await decide(persona, claim, secondOpinion);
     const take = shouldStake(decision.verdict, decision.confidence, persona);
     console.log(`[traders]   #${claim.id} ${decision.verdict} ${decision.confidence}% ${take ? "→ STAKE" : "→ pass"} · ${decision.reasoning.slice(0, 90)}`);
@@ -380,6 +398,7 @@ async function runTrader(persona: TraderPersona): Promise<void> {
       }
     }
   }
+  console.log(`[traders]   cycle summary: ${staked} stake(s), ${paidReads}/${MAX_PAID_READS_PER_CYCLE} paid read(s)`);
 }
 
 async function poll(): Promise<void> {
@@ -401,6 +420,7 @@ async function main(): Promise<void> {
   console.log(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()}`);
   console.log(`  Traders    : ${TRADER_PERSONAS.map((p) => p.agentId).join(", ")}`);
   console.log(`  Stake      : ${TRADER_PERSONAS[0].stakeUsdc} USDC · max ${MAX_STAKES_PER_CYCLE}/cycle each`);
+  console.log(`  Paid reads : max ${MAX_PAID_READS_PER_CYCLE}/cycle each`);
   console.log(`  Poll every : ${POLL_INTERVAL_MS / 1000}s${DRY_RUN ? " · DRY RUN" : ""}`);
   console.log("═══════════════════════════════════════════════\n");
 
