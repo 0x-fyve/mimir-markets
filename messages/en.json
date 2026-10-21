@@ -1076,7 +1076,11 @@
     "claimPayoutError": "Could not collect the payout.",
     "claimPayoutRejected": "Payout signature rejected in your wallet.",
     "claimPayoutCollected": "Payout collected.",
-    "claimPayoutChecking": "Checking your payout..."
+    "claimPayoutChecking": "Checking your payout...",
+    "parkedPayoutTitle": "Parked payout",
+    "parkedPayoutHint": "Your payout could not be delivered — the USDC trustline refused the transfer (it is frozen or deauthorized) — so the contract parked it for you instead of keeping your money. Nothing expires: withdraw it once your trustline can receive USDC.",
+    "parkedWithdrawError": "Could not withdraw the parked payout.",
+    "parkedWithdrawRejected": "Withdrawal signature rejected in your wallet."
   },
   "wallet": {
     "noWallet": "No Stellar wallet found. Install Freighter, xBull, Lobstr or Hana.",
