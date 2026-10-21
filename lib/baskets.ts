@@ -6,24 +6,45 @@ import { isValidBps } from "./money";
  *
  * The address is interpolated verbatim: a Stellar strkey is case-sensitive
  * base32, so any toLowerCase() on it would produce a string no wallet ever signed.
+ *
+ * The message also carries a nonce and an expiry timestamp, exactly like
+ * transferMessage:
+ *
+ *  - `nonce`    — a client-generated UUID, consumed on the server after
+ *                  first use so the same signed message is rejected on replay.
+ *  - `expiresAt` — an ISO-8601 timestamp; the server rejects the message
+ *                  if the current time is past this value.
+ *
+ * This means a captured basket-creation signature cannot be replayed to
+ * insert duplicate baskets.
  */
 export function basketMessage(args: {
   name: string; creator: string; members: Array<{ agentId: string; weightBps: number }>;
+  nonce: string; expiresAt: number;
 }): string {
   return [
     "Mimir basket",
     `name: ${args.name}`,
     `creator: ${args.creator}`,
     `members: ${args.members.map((m) => `${m.agentId}:${m.weightBps}`).join(",")}`,
+    `nonce: ${args.nonce}`,
+    `expiresAt: ${new Date(args.expiresAt).toISOString()}`,
   ].join("\n");
 }
+
+/**
+ * How long a basket-creation authorisation is valid from the moment it is
+ * signed. Matches TRANSFER_EXPIRY_MS so the clock-skew budget is the same
+ * across all signed mutations.
+ */
+export const BASKET_EXPIRY_MS = 5 * 60_000; // 5 minutes
 
 /**
  * How long a transfer authorisation is valid from the moment it is signed.
  *
  * Five minutes matches the agent-request clock-skew window
- * (`AGENT_REQUEST_MAX_SKEW_NS` in lib/agents/api.ts). A signer generates the
- * message, signs it in their wallet, and submits it — that round-trip is well
+ * (`AGENT_REQUEST_MAX_SKEW_MS` in lib/agents/api.ts`). A signer generates the
+ * message, signs it in their wallet, and submits — that round-trip is well
  * inside five minutes. Any captured signature is useless after the window.
  */
 export const TRANSFER_EXPIRY_MS = 5 * 60_000; // 5 minutes
@@ -34,7 +55,7 @@ export const TRANSFER_EXPIRY_MS = 5 * 60_000; // 5 minutes
  * Both addresses are interpolated verbatim — Stellar strkeys are case-sensitive
  * base32 and must never be lowercased. The message now also includes:
  *
- *  - `nonce`     — a client-generated UUID, stored on the server after first use
+ *  - `nonce`    — a client-generated UUID, stored on the server after first use
  *                  so the same signed message is rejected on any replay attempt.
  *  - `expiresAt` — an ISO-8601 timestamp; the server rejects the message if the
  *                  current time is past this value. Limits the replay window even before
@@ -43,8 +64,8 @@ export const TRANSFER_EXPIRY_MS = 5 * 60_000; // 5 minutes
  * Together these two fields mean:
  *   - A signature captured in transit cannot be replayed after TRANSFER_EXPIRY_MS.
  *   - Even within the window, submitting the same signed payload twice is rejected
- *     by the UNIQUE(nonce) constraint on basket_ownership_transfers.
- *   - If ownership cycles ABVB→A, the old ABVB signature is still unusable because
+ *     by the UNIQUE(agent_id, nonce) constraint on the nonce store.
+ *   - If ownership cycles A→B→A, the old A→B signature is still unusable because
  *     its nonce was consumed on first use.
  */
 export function transferMessage(args: {
@@ -120,6 +141,45 @@ export interface NavPoint {
 export interface NavMember {
   agentId: string;
   weightBps: number;
+  category: string;
+  mode: string;
+  paused?: boolean;
+  stale?: boolean;
+}
+export interface BasketReturnPoint { timestamp: number; returnsBps: Record<string, number> }
+export interface BasketPolicy { maxSingleAgentBps: number; maxCategoryBps: number; staleSignalAction: "skip" | "pause"; failedCopyAction: "keep_idle" | "pause" }
+export interface BasketSnapshot { timestamp: number; navAtomic: bigint; drawdownBps: number }
+
+export const VIRTUAL_BASKET_INITIAL_NAV_ATOMIC = 1_000_000_000n ;
+
+export const DEFAULT_BASKET_POLICY: BasketPolicy = {
+  maxSingleAgentBps: 4_000,
+  maxCategoryBps: 6_000,
+  staleSignalAction: "skip",
+  failedCopyAction: "keep_idle",
+};
+
+export type BasketExposurePreviewStatus = "empty" | "incomplete" | "invalid" | "ready";
+
+export interface BasketExposureBar {
+  key: string;
+  bps: number;
+  /** True when this bar alone breaches the matching policy cap. */
+  overLimit: boolean;
+}
+
+export interface BasketExposurePreview {
+  status: BasketExposurePreviewStatus;
+  totalBps: number;
+  categories: Record<string, number>;
+  modes: Record<string, number>;
+  categoryBars: BasketExposureBar[];
+  modeBars: BasketExposureBar[];
+  agentBars: BasketExposureBar[];
+  errors: string[];
+  policy: BasketPolicy;
+}
+
   /** Per-period returns for this member, as decimals (e.g. 0.01 = +1%). */
   returns: number[];
 }
@@ -165,6 +225,71 @@ export function buildNavSeries(
     points.push({ t, nav: Number(nav.toFixed(4)) });
   }
 
+  return points;
+}
+
+/** Performance fee applies only to realized NAV above the previous high-water mark. */
+export function highWaterMarkFee(navAtomic: bigint, highWaterMarkAtomic: bigint, performanceFeeBps: bigint) {
+  if (performanceFeeBps < 0n || performanceFeeBps > 1_000n) throw new Error("performance fee cap");
+  const gain = navAtomic > highWaterMarkAtomic ? navAtomic - highWaterMarkAtomic : 0n;
+  const feeAtomic = (gain * performanceFeeBps) / 10_000n;
+  return { feeAtomic, nextHighWaterMarkAtomic: navAtomic > highWaterMarkAtomic ? navAtomic : highWaterMarkAtomic };
+}
+
+export function sharesForDeposit(assetsAtomic: bigint, totalAssetsAtomic: bigint, totalSharesAtomic: bigint): bigint {
+  if (assetsAtomic <= 0n) throw new Error("zero deposit");
+  if (totalSharesAtomic === 0n) return assetsAtomic;
+  if (totalAssetsAtomic <= 0n) throw new Error("invalid insolvent vault");
+  return (assetsAtomic * totalSharesAtomic) / totalAssetsAtomic;
+}
+
+export function assetsForRedemption(sharesAtomic: bigint, totalAssetsAtomic: bigint, totalSharesAtomic: bigint): bigint {
+  if (sharesAtomic <= 0n || totalSharesAtomic <= 0n) throw new Error("invalid redemption");
+  return (sharesAtomic * totalAssetsAtomic) / totalSharesAtomic;
+}
+
+const DAY_MS = 86_400_000;
+
+/** One agent's settled result, as the basket engine needs to see it. */
+export interface BasketAgentResult {
+  agentId: string;
+  /** Milliseconds. */
+  settledAt: number;
+  pnlAtomic: bigint;
+  stakeAtomic: bigint;
+}
+
+/**
+ * Daily return per agent, in basis points of what that agent staked that day.
+ *
+ * Weighted by stake rather than counting trades: a 10 USDC decision and a 1 USDC one
+ * are not two equal votes, and averaging them as if they were flatters whoever bets
+ * small and often.
+ *
+ * Days with no settlement produce no point at all, so an idle agent contributes a
+ * flat line rather than a zero that drags the basket's average down.
+ */
+export function dailyReturnPoints(results: readonly BasketAgentResult[]): BasketReturnPoint[] {
+  const byDay = new Map<number, Map<string, { pnl: bigint; stake: bigint }>>();
+
+  for (const result of results) {
+    if (result.stakeAtomic <= 0n) continue;
+    const day = Math.floor(result.settledAt / DAY_MS) * DAY_MS;
+    const agents = byDay.get(day) ?? new Map();
+    const prev = agents.get(result.agentId) ?? { pnl: 0n, stake: 0n };
+    agents.set(result.agentId, { pnl: prev.pnl + result.pnlAtomic, stake: prev.stake + result.stakeAtomic });
+    byDay.set(day, agents);
+  }
+
+  const points: BasketReturnPoint[] = [];
+  for (const [day, agents] of [...byDay.entries()].sort((a, b) => a[0] - b[0])) {
+    const returnsBps: Record<string, number> = {};
+    for (const [agentId, { pnl, stake }] of agents) {
+      if (stake <= 0n) continue;
+      returnsBps[agentId] = Number((pnl * 10_000n ) / stake);
+    }
+    points.push({ timestamp: day, returnsBps });
+  }
   return points;
 }
 

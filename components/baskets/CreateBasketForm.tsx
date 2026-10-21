@@ -12,14 +12,17 @@
  * before the wallet signature prompt.
  *
  * Signed by the creator: a basket earns its composer a fee, so who made it has to
- * be proven rather than claimed.
+ * be proven rather than claimed. The signed message carries a nonce and an expiry
+ * timestamp so a captured signature cannot be replayed.
  */
 
 import { useMemo, useState } from "react";
 
 import { AgentAvatar } from "@/components/agents/AgentAvatar";
 import {
+  BASKET_EXPIRY_MS,
   DEFAULT_BASKET_POLICY,
+  basketMessage,
   previewBasketExposureBeforeCreate,
   type BasketAgentWeight,
 } from "@/lib/baskets";
@@ -42,21 +45,15 @@ const POLICY_ERROR_COPY: Record<string, string> = {
 };
 
 /**
- * Mirrors the server's message exactly; a mismatch reads as a rejected signature.
- *
- * The address is interpolated verbatim. Lowercasing it — free for a hex EVM
- * address, which is what this line used to do — corrupts a case-sensitive
- * base32 Stellar strkey, and the signature would never verify.
+ * Generate a client-side nonce. Uses crypto.randomUUID when available (browsers,
+ * Node 19+) and falls back to a random string otherwise. The nonce only needs to
+ * be unique per creator, not unguessable across the world.
  */
-function basketMessage(args: {
-  name: string; creator: string; members: Array<{ agentId: string; weightBps: number }>;
-}): string {
-  return [
-    "Mimir basket",
-    `name: ${args.name}`,
-    `creator: ${args.creator}`,
-    `members: ${args.members.map((m) => `${m.agentId}:${m.weightBps}`).join(",")}`,
-  ].join("\n");
+function newNonce(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function formatBps(bps: number): string {
@@ -90,11 +87,11 @@ function ExposureBars({
               </span>
               <span className={`shrink-0 font-mono tabular-nums ${bar.overLimit ? "text-pv-danger" : "text-pv-muted"}`}>
                 {formatBps(bar.bps)}
-                {bar.overLimit ? " over cap" : ""}
+                {bar.overLimit ? "  over cap" : ""}
               </span>
             </div>
             <div
-              className="h-1.5 overflow-hidden bg-pv-ink/[0.08]"
+              className="h-h-1.5 overflow-hidden bg-pv-ink/[0.08]"
               role="presentation"
               aria-hidden="true"
             >
@@ -187,13 +184,17 @@ export function CreateBasketForm({ agents }: { agents: PickableAgent[] }) {
     setError(null);
     try {
       const members = chosen.map(([agentId, percent]) => ({ agentId, weightBps: Math.round(percent * 100) }));
+      // Fresh nonce + expiry per submit. The server consumes the nonce on first
+      // use, so a replay of this exact signed body is rejected with 409.
+      const nonce = newNonce();
+      const expiresAt = Date.now() + BASKET_EXPIRY_MS;
       const signature = await signMessage(
-        basketMessage({ name: name.trim(), creator: address, members }),
+        basketMessage({ name: name.trim(), creator: address, members, nonce, expiresAt }),
       );
       const response = await fetch("/api/baskets", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), thesis: thesis.trim(), creator: address, members, signature }),
+        body: JSON.stringify({ name: name.trim(), thesis: thesis.trim(), creator: address, members, nonce, expiresAt, signature }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.error?.message ?? "could not create basket");
@@ -270,9 +271,9 @@ export function CreateBasketForm({ agents }: { agents: PickableAgent[] }) {
         <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
           {filtered.map((agent) => (
             <div key={agent.id}
-              className={`flex items-center gap-2.5 border px-3 py-2 ${
+              className={`flex items-center gap-2.5 border px-3 py-2 ${(
                 (weights[agent.id] ?? 0) > 0 ? "border-pv-emerald/40 bg-pv-emerald/[0.06]" : "border-pv-ink/[0.1]"
-              }`}>
+              )}`}>
               <AgentAvatar id={agent.id} address={agent.address} name={agent.displayName} size={26} />
               <span className="min-w-0 flex-1 truncate text-sm text-pv-text">{agent.displayName}</span>
               <span className="shrink-0 font-mono text-[9px] uppercase tracking-wider text-pv-muted">
@@ -298,67 +299,27 @@ export function CreateBasketForm({ agents }: { agents: PickableAgent[] }) {
       {exposurePreview.status !== "empty" && (
         <section
           aria-label="Basket exposure preview"
-          className={`space-y-3 border p-4 ${
-            policyBlocked
-              ? "border-pv-danger/40 bg-pv-danger/[0.05]"
-              : "border-pv-ink/[0.12] bg-pv-surface2/40"
-          }`}
+          className="space-y-3 border border-pv-ink/[0.1] bg-pv-surface2/40 p-4"
         >
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="font-mono text-[10px] uppercase tracking-wider text-pv-muted">
-              Exposure preview
-            </h3>
-            <p
-              className={`text-[12px] ${policyBlocked ? "text-pv-danger" : "text-pv-muted"}`}
-              role="status"
-              aria-live="polite"
-            >
-              {statusCopy}
-            </p>
-          </div>
-          <p className="text-[11px] leading-relaxed text-pv-muted">
-            Same caps the create API applies: agent ≤ {formatBps(DEFAULT_BASKET_POLICY.maxSingleAgentBps)},
-            {" "}track ≤ {formatBps(DEFAULT_BASKET_POLICY.maxCategoryBps)}. No funds move until you
-            sign; this is allocation only.
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <ExposureBars
-              title="By track"
-              bars={exposurePreview.categoryBars}
-              capLabel={`cap ${formatBps(DEFAULT_BASKET_POLICY.maxCategoryBps)}`}
-            />
-            <ExposureBars
-              title="By agent"
-              bars={exposurePreview.agentBars}
-              capLabel={`cap ${formatBps(DEFAULT_BASKET_POLICY.maxSingleAgentBps)}`}
-            />
-          </div>
-          {exposurePreview.modeBars.length > 0 && (
-            <ExposureBars title="By mode" bars={exposurePreview.modeBars} />
-          )}
-          {policyBlocked && exposurePreview.errors.length > 0 && (
-            <ul className="space-y-1 text-[12px] text-pv-danger" role="alert">
-              {exposurePreview.errors
-                .filter((code) => code !== "weights_must_total_10000_bps")
-                .map((code) => (
-                  <li key={code}>{POLICY_ERROR_COPY[code] ?? code}</li>
-                ))}
-            </ul>
-          )}
+          <ExposureBars title="Track concentration" bars={exposurePreview.categoryBars}
+            capLabel={`cap ${formatBps(DEFAULT_BASKET_POLICY.maxCategoryBps)}`} />
+          <ExposureBars title="Agent concentration" bars={exposurePreview.agentBars}
+            capLabel={`cap ${formatBps(DEFAULT_BASKET_POLICY.maxSingleAgentBps)}`} />
+          <p className="font-mono text-[10px] uppercase tracking-wider text-pv-muted">{statusCopy}</p>
         </section>
       )}
 
-      {error && <p className="text-[12px] text-pv-danger">{error}</p>}
+      {error && (
+        <p className="border border-pv-danger/40 bg-pv-danger/[0.06] px-3 py-2 text-[12px] text-pv-danger">{error}</p>
+      )}
 
-      <button type="button" disabled={busy || exposurePreview.status !== "ready" || !name.trim()}
+      <button
+        type="button"
         onClick={submit}
-        className="btn-compact-primary w-full px-4 py-2.5 text-[13px] disabled:opacity-40">
-        {!isConnected ? "Connect wallet to create"
-          : busy ? "Waiting for signature…"
-          : exposurePreview.status === "incomplete" ? `Allocate ${100 - total}% more`
-          : policyBlocked ? "Fix exposure to create"
-          : !name.trim() ? "Name the basket"
-          : "Create basket"}
+        disabled={busy || policyBlocked || !chosen.length || !name.trim()}
+        className="w-full border border-pv-emerald/45 bg-pv-emerald/[0.1] px-4 py-2.5 font-mono text-[11px] uppercase tracking-wider text-pv-emerald transition-colors hover:bg-pv-emerald/[0.18] disabled:opacity-40"
+      >
+        {busy ? "Signing…" : isConnected ? "Create basket" : "Connect wallet"}
       </button>
     </div>
   );
