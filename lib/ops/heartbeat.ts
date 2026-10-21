@@ -22,6 +22,7 @@ import { getSyncMeta, setSyncMeta, isDbConfigured } from "@/lib/db";
 import { pauseEnvKey, pauseState, type Pausable } from "./flags";
 
 import { currentTraceId, endSpan, mintTraceId, runWithTrace, startSpan } from "./trace";
+import { jitteredIntervalMs } from "./poll-jitter";
 
 import {
   decodeHeartbeat,
@@ -199,6 +200,13 @@ export interface RunWorkerLoopOptions {
   worker: MonitoredWorker;
   /** Milliseconds to wait between the end of one cycle and the start of the next. */
   intervalMs: number;
+  /**
+   * ± milliseconds applied to each inter-cycle wait (see `poll-jitter.ts`).
+   * Omitted or 0 keeps fixed scheduling.
+   */
+  jitterMs?: number;
+  /** Uniform [0, 1) random source. Injectable so tests can seed the jitter. */
+  random?: () => number;
   /** One cycle. Errors are the caller's to swallow (e.g. `reportingPoll` does). */
   cycle: () => Promise<unknown>;
   /** Hard timeout before forcing exit on shutdown. Defaults to 30s. */
@@ -218,6 +226,8 @@ export async function runWorkerLoop(opts: RunWorkerLoopOptions): Promise<void> {
   const {
     worker,
     intervalMs,
+    jitterMs = 0,
+    random = Math.random,
     cycle,
     shutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
     process = globalThis.process,
@@ -287,7 +297,9 @@ export async function runWorkerLoop(opts: RunWorkerLoopOptions): Promise<void> {
         log.error(`[${worker}] cycle threw unexpectedly:`, err);
       }
       if (stopping) break;
-      await sleep(intervalMs);
+      // Recompute every cycle: a fixed offset would just re-synchronise the
+      // workers at interval ± the same constant.
+      await sleep(jitteredIntervalMs({ intervalMs, jitterMs, random }));
     }
   } finally {
     for (const sig of signals) process.off(sig, onSignal);

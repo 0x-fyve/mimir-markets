@@ -17,6 +17,7 @@
  * Env: DATABASE_URL, NEXT_PUBLIC_STELLAR_MARKET_CONTRACT_ID,
  *      NEXT_PUBLIC_STELLAR_RPC_URL
  *      SYNC_POLL_INTERVAL_MS=300000 (poll cadence in ms, default 5m)
+ *      SYNC_POLL_JITTER_MS=30000    (± spread per cycle, default 10%; 0 = fixed)
  */
 
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import path from "node:path";
 
 import { getMarketContractId, getStellarRpcUrl } from "../../lib/stellar";
 import { reportingPoll, runWorkerLoop } from "../../lib/ops/heartbeat";
+import { resolvePollJitterMs } from "../../lib/ops/poll-jitter";
 import { reconcileSettlements } from "../../lib/server/settlement-index";
 import { reconcileVsIndex } from "../../lib/server/vs-index";
 import {
@@ -38,6 +40,8 @@ import {
 // Default 5m: the health probe warns when the index is over 300s stale, so a
 // slower cadence would report a working sync as degraded.
 const POLL_INTERVAL_MS = Number(process.env.SYNC_POLL_INTERVAL_MS ?? "300000");
+// ± around each cycle; unset = 10% of the interval, 0 = fixed scheduling.
+const POLL_JITTER_MS = resolvePollJitterMs(POLL_INTERVAL_MS, process.env.SYNC_POLL_JITTER_MS);
 
 export interface SettlementDrainSummary {
   passes: number;
@@ -196,6 +200,7 @@ async function main(): Promise<void> {
   console.log(`  Contract   : ${getMarketContractId() || "(unset)"}`);
   console.log(`  Soroban RPC: ${getStellarRpcUrl()}`);
   console.log(`  Poll every : ${POLL_INTERVAL_MS / 1000}s`);
+  console.log(`  Poll jitter: ±${(POLL_JITTER_MS / 1000).toFixed(1)}s`);
   console.log("═══════════════════════════════════════════════\n");
 
   // Reports a heartbeat either way, so a crash-looping sync shows as alive and
@@ -205,6 +210,7 @@ async function main(): Promise<void> {
   await runWorkerLoop({
     worker: "sync",
     intervalMs: POLL_INTERVAL_MS,
+    jitterMs: POLL_JITTER_MS,
     cycle: safePoll,
   });
 }
