@@ -21,7 +21,7 @@
  *      NEXT_PUBLIC_STELLAR_MARKET_CONTRACT_ID, NEXT_PUBLIC_STELLAR_RPC_URL
  *      TRADER_POLL_INTERVAL_MS=900000  (poll cadence, default 15m)
  *      TRADER_MAX_STAKES_PER_CYCLE=1   (stakes per trader per cycle)
- *      TRADER_DRY_RUN=1                (decide and log, stake nothing)
+ *      TRADER_DRY_RUN=1                (decide and log, stake nothing, spend nothing)
  */
 
 // Groq for the traders regardless of what the rest of the fleet uses: their whole
@@ -54,7 +54,7 @@ import { AUTHORITY_LEVELS, defaultLimits, REGISTRY_SCHEMA_VERSION, type AgentRec
 import { loadAgent, saveAgent } from "../../lib/agents/store";
 import { getClaimsByFilter, getChallengersByClaimId } from "../../lib/db";
 import { TRADER_PERSONAS, isTraderVerdict, shouldStake, type TraderPersona, type TraderVerdict } from "./personas";
-import { filterJoinableClaims } from "./policy";
+import { filterJoinableClaims, shouldBuySecondOpinion } from "./policy";
 
 const POLL_INTERVAL_MS = Number(process.env.TRADER_POLL_INTERVAL_MS ?? "900000");
 const MAX_STAKES_PER_CYCLE = Number(process.env.TRADER_MAX_STAKES_PER_CYCLE ?? "1");
@@ -170,8 +170,12 @@ async function buyOracleOpinion(
   wallet: AgentWallet,
   claim: { question: string | null; creator_position: string | null; counter_position: string | null; resolution_url: string | null; settlement_rule: string | null },
 ): Promise<string | null> {
-  if (!BUY_SECOND_OPINION || !MIMIR_URL) return null;
-  if (!claim.question || !claim.resolution_url) return null;
+  if (DRY_RUN) {
+    console.log(`[traders]   DRY_RUN — skipping paid oracle read (${PRICES.oracle} USDC)`);
+    return null;
+  }
+  if (!shouldBuySecondOpinion({ buySecondOpinion: BUY_SECOND_OPINION, mimirUrl: MIMIR_URL, dryRun: DRY_RUN, claim })) return null;
+
   try {
     const { response, payment } = await fetchWithBudget(
       `${MIMIR_URL}/api/oracle`,
