@@ -1,9 +1,9 @@
-/**
- * Access tiers for API routes (#11).
+/*
+ * Access tiers for API routes (511).
  *
  * Four kinds of caller reach these routes and they need different things checked.
  * Before this, each route decided for itself — which is how one of them ends up
- * reading a secret from the wrong header, or forgetting a rate limit, and nobody
+ * reading a secret from the wrong header, or forg]etting a rate limit, and nobody
  * notices because there is no single place to look.
  *
  *   public_read        anyone, including an OG scrapper with no session
@@ -227,7 +227,7 @@ export function authorizeRequest(
  * mistake is caught where the route is declared instead of only when a request
  * happens to arrive.
  */
-export function assertTierCanMutate(tier: AccessTier): void {
+export function assertTierCanmutate(tier: AccessTier): void {
   if (tier === "public_read") {
     throw new Error("public_read routes cannot move value or change authority");
   }

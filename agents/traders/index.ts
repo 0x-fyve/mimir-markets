@@ -67,6 +67,9 @@ const DRY_RUN = process.env.TRADER_DRY_RUN === "1";
 const MIMIR_URL = (process.env.MIMIR_URL ?? "").replace(/\/$/, "");
 const BUY_SECOND_OPINION = process.env.TRADER_BUY_ORACLE !== "0";
 
+/** UTC day boundary in ms — exposure limits reset at 00:00 UTC. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 interface Decision {
   verdict: TraderVerdict;
   confidence: number;
@@ -115,6 +118,55 @@ async function ensureRegistered(persona: TraderPersona, wallet: AgentWallet): Pr
   await saveAgent(record);
   console.log(`[traders] ${persona.emoji} registered ${persona.agentId} (${wallet.address})`);
   return record;
+}
+
+/**
+ * Sum of `amount` staked by `wallet` on claims whose stake landed within the
+ * current UTC day. Exported for unit tests.
+ *
+ * `stakes` is the flat list of (claimId, challenger) rows the caller has already
+ * gathered; `stakedAtMs` is the challenger's stake timestamp in ms. Rows without
+ * a timestamp are treated as today so an unreadable row errs toward the limit
+ * rather than silently allowing an over-stake.
+ */
+export function sumTodayStake(
+  stakes: Array<{ address: string; amount: number; stakedAtMs?: number }>,
+  wallet: string,
+  nowMs: number = Date.now(),
+): number {
+  const dayStart = Math.floor(nowMs / DAY_MS) * DAY_MS;
+  let total = 0;
+  for (const s of stakes) {
+    if (s.address !== wallet) continue;
+    const at = s.stakedAtMs ?? nowMs;
+    if (at < dayStart || at >= dayStart + DAY_MS) continue;
+    total += Number(s.amount) || 0;
+  }
+  return total;
+}
+
+/**
+ * Gather every challenger row for `wallet` across the claims it has touched, so
+ * the daily exposure can be computed. Best-effort: a claim whose challengers
+ * cannot be read contributes nothing, which is the same as before this guard.
+ */
+async function gatherWalletStakes(wallet: AgentWallet): Promise<Array<{ address: string; amount: number; stakedAtMs?: number }>> {
+  const rows = await getClaimsByFilter({ states: ["open", "active", "settled"], limit: 200 }).catch(() => []);
+  const out: Array<{ address: string; amount: number; stakedAtMs?: number }> = [];
+  for (const claim of rows) {
+    const challengers = await getChallengersByClaimId(claim.id).catch(() => []);
+    for (const c of challengers) {
+      if (c.address !== wallet.address) continue;
+      const raw = c as unknown as { amount?: number; staked_at?: number; stakedAt?: number };
+      const stakedAtMs = raw.staked_at != null
+        ? Number(raw.staked_at) * 1000
+        : raw.stakedAt != null
+          ? Number(raw.stakedAt)
+          : undefined;
+      out.push({ address: c.address, amount: Number(raw.amount ?? 0), stakedAtMs });
+    }
+  }
+  return out;
 }
 
 function decisionPrompt(persona: TraderPersona, claim: {
@@ -282,6 +334,10 @@ async function runTrader(persona: TraderPersona): Promise<void> {
   const joinable = await joinableFor(wallet);
   if (joinable.length === 0) return void console.log(`[traders]   nothing joinable this cycle`);
 
+  const record = await ensureRegistered(persona, wallet);
+  const todayStaked = sumTodayStake(await gatherWalletStakes(wallet), wallet.address);
+  const maxDaily = record.limits.maxDailyExposureUsdc;
+
   let staked = 0;
   for (const claim of joinable) {
     if (staked >= MAX_STAKES_PER_CYCLE) break;
@@ -290,6 +346,14 @@ async function runTrader(persona: TraderPersona): Promise<void> {
     const take = shouldStake(decision.verdict, decision.confidence, persona);
     console.log(`[traders]   #${claim.id} ${decision.verdict} ${decision.confidence}% ${take ? "→ STAKE" : "→ pass"} · ${decision.reasoning.slice(0, 90)}`);
     if (!take) continue;
+    const projected = todayStaked + (staked + 1) * persona.stakeUsdc;
+    if (projected > maxDaily) {
+      console.log(
+        `[traders]   skip #${claim.id}: daily exposure ${todayStaked.toFixed(2)} + ${persona.stakeUsdc} ` +
+          `would exceed maxDailyExposureUsdc ${maxDaily.toFixed(2)} USDC`,
+      );
+      continue;
+    }
     if (DRY_RUN) {
       console.log(`[traders]   DRY_RUN — would stake ${persona.stakeUsdc} USDC on #${claim.id}`);
       staked += 1;

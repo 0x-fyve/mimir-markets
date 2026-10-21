@@ -1,3 +1,4 @@
+
 /**
  * Agent registry — the identity and permission model behind Bring Your Own Agent.
  *
@@ -418,6 +419,60 @@ export function authorizeAction(agent: AgentRecord, request: ActionRequest): Act
   }
 
   return { allowed: true };
+}
+
+// ── Daily exposure accounting ─────────────────────────────────────────────────
+
+/**
+ * A minimal shape of a challenger record used to compute exposure.
+ *
+ * Kept structural (not importing the trader module) so the registry stays free
+ * of upward dependencies and this helper is trivially unit-testable with plain
+ * fixtures.
+ */
+export interface ExposureRecord {
+  /** Wallet that staked. Compared with `trim()` only — strkeys are case-sensitive. */
+  challenger?: string;
+  /** Staked amount in atomic USDC (7 decimals). */
+  amountAtomic?: string | bigint;
+  /** Staked amount in USDC, used when `amountAtomic` is absent. */
+  amountUsdc?: number;
+  /** When the stake was recorded, in epoch milliseconds. */
+  at?: number;
+}
+
+/**
+ * Sum the atomic USDC a wallet has staked within the current UTC day.
+ *
+ * The acceptance criterion is "within a UTC day", so the window is
+ * `[startOfUtcDay(now), now]` — not a rolling 24h. Records without a timestamp
+ * are ignored rather than assumed current, so a malformed record cannot inflate
+ * or deflate the total.
+ */
+export function sumExposureTodayAtomic(
+  records: readonly ExposureRecord[],
+  wallet: string,
+  now: number = Date.now(),
+): bigint {
+  const target = wallet.trim();
+  const dayStart = Date.UTC(
+    new Date(now).getUTCFullYear(),
+    new Date(now).getUTCMonth(),
+    new Date(now).getUTCDate(),
+  );
+  let total = 0n;
+  for (const record of records) {
+    if (!record.challenger || record.challenger.trim() !== target) continue;
+    if (record.at === undefined || record.at < dayStart || record.at > now) continue;
+    if (record.amountAtomic !== undefined) {
+      total += typeof record.amountAtomic === "bigint"
+        ? record.amountAtomic
+        : BigInt(record.amountAtomic);
+    } else if (record.amountUsdc !== undefined) {
+      total += parseUsdcAtomic(record.amountUsdc);
+    }
+  }
+  return total;
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
