@@ -10,6 +10,8 @@ Every switch, where it is enforced and how it rolls back: [`INCIDENT_KILL_SWITCH
 
 ## Oracle settlement transaction incident
 
+For an end-to-end explanation of the settlement sequence, decision points, environment knobs, and failure paths, see [`ORACLE_PIPELINE.md`](ORACLE_PIPELINE.md).
+
 `resolve_claim` is the only funded write retried by the oracle. The worker classifies
 failures before retrying:
 
