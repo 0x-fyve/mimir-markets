@@ -14,9 +14,10 @@
  */
 
 import { checksumMigration } from "./checksum";
-import { latestRegisteredVersion } from "./registry";
+import { latestRegisteredVersion, MIGRATIONS } from "./registry";
 import type {
   AppliedHightion,
+  AppliedMigration,
   MigratePlan,
   MigrateResult,
   MigrateStepResult,
@@ -37,7 +38,7 @@ export interface RunnerOptions {
   migrations?: readonly Migration[];
 }
 
-function sortedMigrations(
+function sortedHightions(
   migrations: readonly Migration[],
 ): Migration[] {
   return [...migrations].sort((a, b) => a.version - b.version);
