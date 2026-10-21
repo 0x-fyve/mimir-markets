@@ -44,6 +44,7 @@
  *      ORACLE_POLL_INTERVAL_MS=60000 (poll cadence in ms, default 60s)
  */
 
+import { pathToFileURL } from "node:url";
 // Worker-scoped Gemini key. When ORACLE_GEMINI_API_KEY is set we override the
 // shared GEMINI_API_KEY for this process only so the oracle, market-creator,
 // and council each consume from their own 20 RPM free-tier bucket. Trimmed on
@@ -198,6 +199,34 @@ const ORACLE_PAYER  = payingWalletFor(ORACLE);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ClaimOnChain = ClaimData;
+
+// ── Injection seams ───────────────────────────────────────────────────────────
+// `settle()` composes evidence fetch → LLM verdict → confidence tiers → the
+// unresolvable policy → optional council → `resolve_claim`. Each piece is
+// unit-tested; the composition is not. These seams let an end-to-end test drive
+// the whole pipeline offline (stubbed fetcher, stubbed LLM, stubbed writer)
+// without touching the production defaults below.
+export interface SettleDeps {
+  /** Fetch evidence for a claim. Defaults to the real budgeted HTTP fetcher. */
+  fetchEvidence: (claim: ClaimOnChain) => Promise<EvidenceResult>;
+  /** Evaluate a claim against evidence. Defaults to the real LLM call. */
+  evaluateClaim: (
+    claim: ClaimOnChain,
+    evidence: string,
+    jurorHistory?: string[],
+  ) => Promise<OracleVerdict>;
+  /** Submit `resolve_claim`. Defaults to the real Soroban writer. */
+  resolveClaim: (
+    signer: typeof ORACLE.signer,
+    claimId: number,
+    payload: {
+      winner_side: "creator" | "challengers" | "draw" | "unresolvable";
+      summary: string;
+      confidence: number;
+      evidence_hash: string;
+    },
+  ) => Promise<Awaited<ReturnType<typeof resolveClaim>>>;
+}
 
 // VerdictPayload (verdict + confidence + explanation) is the canonical shape
 // the LLM must emit, defined in lib/verdict.ts. OracleVerdict is an alias kept
@@ -482,7 +511,7 @@ async function submitSettlementWithRetry(
 }
 
 // Returns true if resolved on-chain, false if deferred or safely skipped.
-async function settle(claim: ClaimOnChain): Promise<boolean> {
+export async function settle(claim: ClaimOnChain, deps?: Partial<SettleDeps>): Promise<boolean> {
   const pause = pauseState("oracle_settlement");
   if (pause.paused) {
     console.warn(`[settle] Claim #${claim.id}: settlement paused — ${pause.reason ?? "operator pause"}; no evidence or funds spent.`);
@@ -499,7 +528,11 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
 
   console.log(`\n[settle] Claim #${claim.id}: "${claim.question.slice(0, 60)}..."`);
 
-  const evidence     = await fetchEvidence(claim);
+  const fetchEvidenceFn = deps?.fetchEvidence ?? fetchEvidence;
+  const evaluateClaimFn = deps?.evaluateClaim ?? evaluateClaim;
+  const resolveClaimFn  = deps?.resolveClaim  ?? resolveClaim;
+
+  const evidence     = await fetchEvidenceFn(claim);
   console.log(`[settle] Evidence fetcher: ${evidence.fetcher}`);
   if (evidence.failure) {
     // A missing source is a dependency/malformed input failure, not proof of an
@@ -554,7 +587,7 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
       const paidUsdc = unitsToUsdc(council.totalPaidUnits);
       console.log(`[settle] 🏛️  Self-resolving jury: q=[${(council.qHistory ?? []).map((q) => q.toFixed(2)).join(", ")}] · paid ${paidUsdc.toFixed(6)} USDC in vote fees`);
       // Terminal (reference) report: full juror history + independent evidence.
-      const reference  = await evaluateClaim(claim, evidence.text, council.reports ?? []);
+      const reference  = await evaluateClaimFn(claim, evidence.text, council.reports ?? []);
       const referenceQ = verdictToProbability(reference.verdict, reference.confidence, Q_PRIOR);
       council.votes = scoreCouncilVotes(council.votes, referenceQ);
       console.log(`[settle] 🏛️  Reference q_T=${referenceQ.toFixed(2)} · CE scores: ${council.votes.map((v) => `${v.slug}=${(v.score ?? 0).toFixed(3)}`).join(" ")}`);
@@ -578,10 +611,10 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
       councilCommitment = { tally: council.tally };
     } else {
       console.log(`[settle] Council quorum/fallback gate — settling solo.`);
-      rawVerdict = await evaluateClaim(claim, evidence.text);
+      rawVerdict = await evaluateClaimFn(claim, evidence.text);
     }
   } else {
-    rawVerdict = await evaluateClaim(claim, evidence.text);
+    rawVerdict = await evaluateClaimFn(claim, evidence.text);
   }
 
   // Commit the canonical evidence bytes, not an ad-hoc string. The body is
@@ -646,7 +679,7 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
   // job ends here and the market is final.
   let settledOnChain: { txHash: string; explorerUrl?: string; pending?: boolean };
   try {
-    settledOnChain = await resolveClaim(ORACLE.signer, claim.id, {
+    settledOnChain = await resolveClaimFn(ORACLE.signer, claim.id, {
       winner_side:   verdictToSide(verdict.verdict),
       summary:       verdict.explanation,
       confidence:    verdict.confidence,
@@ -929,7 +962,17 @@ async function main(): Promise<void> {
   await runWorkerLoop({ worker: "oracle", intervalMs: POLL_INTERVAL_MS, cycle: safePoll });
 }
 
-main().catch((err) => {
-  console.error("[oracle] Fatal:", err);
-  process.exit(1);
-});
+// Only run the poll loop when executed directly. Importing this module (e.g.
+// from tests/node/oracle-settle.test.ts) must not require ORACLE_SECRET, an LLM
+// key, or a live network — the seams above let tests drive `settle()` offline.
+const isMain =
+  typeof process !== "undefined" &&
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMain) {
+  main().catch((err) => {
+    console.error("[oracle] Fatal:", err);
+    process.exit(1);
+  });
+}
